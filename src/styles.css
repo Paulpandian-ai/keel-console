@@ -315,3 +315,54 @@ table.feed td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical
   border: 1px solid var(--line);
   border-radius: 7px;
 }
+
+/* ------------------------------------------------- tables shared by step 3 */
+
+.table-scroll { overflow-x: auto; }
+.col-code { width: 110px; }
+.col-money { text-align: right; white-space: nowrap; }
+table.feed tfoot th {
+  padding: 8px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+  font-weight: 600;
+}
+table.feed tfoot th.col-money { text-align: right; font-family: var(--mono); }
+.detail { display: grid; gap: 6px; padding: 4px 2px 8px; }
+.detail h3 { margin: 0; font-size: 13px; font-weight: 600; }
+
+/* ------------------------------------------------------------- open items */
+
+.tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.tab {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.tab.is-active { color: var(--text); border-color: var(--accent); background: var(--panel-2); }
+.tab-hint { font-size: 11px; }
+.checkbox { flex-direction: row; align-items: center; gap: 6px; }
+
+/* ------------------------------------------------------------------ close */
+
+.recon-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.recon-card {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+.recon-card h3 { margin: 0; font-size: 14px; }
+.recon-card .hint { margin: 0; }
+.notes-pair { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.notes-pair h3 { margin: 0 0 4px; font-size: 13px; }

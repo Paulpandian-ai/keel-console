@@ -323,3 +323,283 @@ export function readSearchPage(payload: unknown): SearchPage {
 export function hitTarget(hit: SearchHit): string | null {
   return hit.number ?? hit.id
 }
+
+/* ------------------------------------------------------------------ ledger */
+
+/** One row of `get_trial_balance` → `accounts`. */
+export interface TrialBalanceAccount {
+  code: string | null
+  name: string | null
+  type: string | null
+  debitCents: number | null
+  creditCents: number | null
+  netCents: number | null
+}
+
+/** `get_trial_balance(period_code?)` → `{accounts, is_balanced, period, total_*}`. */
+export interface TrialBalance {
+  accounts: TrialBalanceAccount[]
+  isBalanced: boolean | null
+  period: string | null
+  totalDebitCents: number | null
+  totalCreditCents: number | null
+}
+
+export function readTrialBalance(payload: unknown): TrialBalance {
+  const source = asObject(payload)
+  return {
+    accounts: asArray(source.accounts).map((raw) => {
+      const account = asObject(raw)
+      return {
+        code: scalar(account.code),
+        name: scalar(account.name),
+        type: scalar(account.type),
+        debitCents: asNumber(account.debit_cents),
+        creditCents: asNumber(account.credit_cents),
+        netCents: asNumber(account.net_cents),
+      }
+    }),
+    isBalanced: typeof source.is_balanced === 'boolean' ? source.is_balanced : null,
+    period: scalar(source.period),
+    totalDebitCents: asNumber(source.total_debit_cents),
+    totalCreditCents: asNumber(source.total_credit_cents),
+  }
+}
+
+/** One row of `get_ledger_entries` → `entries`. */
+export interface LedgerEntry {
+  entry: string | null
+  entryId: string | null
+  postingDate: string | null
+  description: string | null
+  memo: string | null
+  debitCents: number | null
+  creditCents: number | null
+  runningNetCents: number | null
+  sourceType: string | null
+  sourceId: string | null
+  status: string | null
+}
+
+/** `get_ledger_entries(account_code, period_code?, limit?)`. Paged by `limit` only. */
+export interface LedgerPage {
+  account: string | null
+  period: string | null
+  count: number | null
+  entries: LedgerEntry[]
+}
+
+export function readLedgerPage(payload: unknown): LedgerPage {
+  const source = asObject(payload)
+  return {
+    account: scalar(source.account),
+    period: scalar(source.period),
+    count: asNumber(source.count),
+    entries: asArray(source.entries).map((raw) => {
+      const entry = asObject(raw)
+      return {
+        entry: scalar(entry.entry),
+        entryId: scalar(entry.entry_id),
+        postingDate: scalar(entry.posting_date),
+        description: scalar(entry.description),
+        memo: scalar(entry.memo),
+        debitCents: asNumber(entry.debit_cents),
+        creditCents: asNumber(entry.credit_cents),
+        runningNetCents: asNumber(entry.running_net_cents),
+        sourceType: scalar(entry.source_type),
+        sourceId: scalar(entry.source_id),
+        status: scalar(entry.status),
+      }
+    }),
+  }
+}
+
+/** `explain_balance` → `by_source_type`: the movements grouped by what caused them. */
+export interface BalanceBySource {
+  sourceType: string | null
+  count: number | null
+  netCents: number | null
+}
+
+/**
+ * `explain_balance(account_code, period_code?)` → `{account, period, balance,
+ * by_source_type, movements, reversal_pairs}`. A movement carries `{entry,
+ * posting_date, debit_cents, credit_cents, net_cents, running_cents, memo,
+ * source, source_type, actor, on_behalf_of, tool, is_reversal, reversed,
+ * reversal_of}`; the page shows the grouping and counts, and reads the
+ * movements themselves through the paged `get_ledger_entries`.
+ */
+export interface BalanceExplanation {
+  account: string | null
+  period: string | null
+  debitCents: number | null
+  creditCents: number | null
+  netCents: number | null
+  asOf: string | null
+  bySourceType: BalanceBySource[]
+  movementCount: number
+  /** Reversal/original pairs Keel matched up on this account. */
+  reversalPairs: Json[]
+}
+
+export function readBalanceExplanation(payload: unknown): BalanceExplanation {
+  const source = asObject(payload)
+  const balance = asObject(source.balance)
+  return {
+    account: scalar(source.account),
+    period: scalar(source.period),
+    debitCents: asNumber(balance.debit_cents),
+    creditCents: asNumber(balance.credit_cents),
+    netCents: asNumber(balance.net_cents),
+    asOf: scalar(balance.as_of),
+    bySourceType: asArray(source.by_source_type).map((raw) => {
+      const group = asObject(raw)
+      return {
+        sourceType: scalar(group.source_type),
+        count: asNumber(group.count),
+        netCents: asNumber(group.net_cents),
+      }
+    }),
+    movementCount: asArray(source.movements).length,
+    reversalPairs: asArray(source.reversal_pairs).map(asObject),
+  }
+}
+
+/* --------------------------------------------------------------- inventory */
+
+/** One row of `get_inventory(sku?)` → `items`. */
+export interface InventoryItem {
+  sku: string | null
+  name: string | null
+  onHandQty: number | null
+  standardCostCents: number | null
+  listPriceCents: number | null
+  valueCents: number | null
+  isActive: boolean | null
+  isStocked: boolean | null
+}
+
+export interface Inventory {
+  items: InventoryItem[]
+  totalValueCents: number | null
+}
+
+export function readInventory(payload: unknown): Inventory {
+  const source = asObject(payload)
+  return {
+    items: asArray(source.items).map((raw) => {
+      const item = asObject(raw)
+      return {
+        sku: scalar(item.sku),
+        name: scalar(item.name),
+        onHandQty: asNumber(item.on_hand_qty),
+        standardCostCents: asNumber(item.standard_cost_cents),
+        listPriceCents: asNumber(item.list_price_cents),
+        valueCents: asNumber(item.value_cents),
+        isActive: typeof item.is_active === 'boolean' ? item.is_active : null,
+        isStocked: typeof item.is_stocked === 'boolean' ? item.is_stocked : null,
+      }
+    }),
+    totalValueCents: asNumber(source.total_value_cents),
+  }
+}
+
+/* -------------------------------------------------------------- open items */
+
+/**
+ * `list_open_items(kind, party?, overdue_only?, as_of?)` →
+ * `{kind, as_of, count, total_remaining_cents, items}`.
+ *
+ * The envelope above is recorded. **The rows are not**: the seeded dataset has
+ * no unpaid invoices, so `items` has only ever come back empty and the console
+ * has never seen a row's keys. Rather than guess at them, the page renders
+ * whatever columns Keel sends (see `AutoTable`) and this reader keeps the rows
+ * untouched. Replace with named fields once a dataset with AP/AR data exists.
+ */
+export interface OpenItems {
+  kind: string | null
+  asOf: string | null
+  count: number | null
+  totalRemainingCents: number | null
+  items: Json[]
+}
+
+export function readOpenItems(payload: unknown): OpenItems {
+  const source = asObject(payload)
+  return {
+    kind: scalar(source.kind),
+    asOf: scalar(source.as_of),
+    count: asNumber(source.count),
+    totalRemainingCents: asNumber(source.total_remaining_cents),
+    items: asArray(source.items).map(asObject),
+  }
+}
+
+/* ---------------------------------------------------------- reconciliation */
+
+/**
+ * `get_reconciliation(kind)`. The three fields below are common to all four
+ * kinds; everything else differs by kind and is read from `raw` where it is
+ * shown, against these recorded shapes:
+ *
+ *   gr_ir     {gl_1400_net_cents, subledger_open_cents, by_po: []}
+ *   ap | ar   {control_account, control_account_cents, subledger_cents, open_items: []}
+ *   inventory {gl_1300_net_cents, subledger_value_cents, items: [...], note}
+ */
+export interface Reconciliation {
+  kind: string | null
+  reconciled: boolean | null
+  differenceCents: number | null
+  raw: Json
+}
+
+export function readReconciliation(payload: unknown): Reconciliation {
+  const source = asObject(payload)
+  return {
+    kind: scalar(source.kind),
+    reconciled: typeof source.reconciled === 'boolean' ? source.reconciled : null,
+    differenceCents: asNumber(source.difference_cents),
+    raw: source,
+  }
+}
+
+/* ------------------------------------------------------------------ period */
+
+/** `get_period(period_code)` → `{period, close_readiness}`. */
+export interface PeriodReadiness {
+  code: string | null
+  status: string | null
+  startDate: string | null
+  endDate: string | null
+  ready: boolean | null
+  trialBalanceOk: boolean | null
+  pendingApprovals: number | null
+  openGrIrCents: number | null
+  uninvoicedShipmentLines: number | null
+  blockers: unknown[]
+  warnings: unknown[]
+  blockedSupplierInvoices: unknown[]
+  draftPurchaseOrders: unknown[]
+}
+
+export function readPeriodReadiness(payload: unknown): PeriodReadiness {
+  const source = asObject(payload)
+  const period = asObject(source.period)
+  const readiness = asObject(source.close_readiness)
+  return {
+    code: scalar(period.code) ?? scalar(readiness.period),
+    status: scalar(period.status) ?? scalar(readiness.status),
+    startDate: scalar(period.start_date),
+    endDate: scalar(period.end_date),
+    ready: typeof readiness.ready === 'boolean' ? readiness.ready : null,
+    trialBalanceOk:
+      typeof readiness.trial_balance_ok === 'boolean' ? readiness.trial_balance_ok : null,
+    pendingApprovals: asNumber(readiness.pending_approvals),
+    openGrIrCents: asNumber(readiness.open_gr_ir_cents),
+    uninvoicedShipmentLines: asNumber(readiness.uninvoiced_shipment_lines),
+    blockers: asArray(readiness.blockers),
+    warnings: asArray(readiness.warnings),
+    blockedSupplierInvoices: asArray(readiness.blocked_supplier_invoices),
+    draftPurchaseOrders: asArray(readiness.draft_purchase_orders),
+  }
+}

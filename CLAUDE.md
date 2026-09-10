@@ -25,13 +25,13 @@ Keel is a headless, agent-native ERP. This repo is a **head**: a thin, replaceab
 |---|---|---|
 | `/` Status | `GET /healthz`, `get_trial_balance`, `get_reconciliation`, `list_pending_approvals`, `get_period`, `search_documents(FiscalPeriod)` | env badge, version, key id, event seq, policy version; books balanced + totals; the four reconciliations; approvals waiting; close readiness for a chosen period. **Not `get_system_status`** — it needs `admin:status`, which a console token has no business holding |
 | `/events` | SSE stream, `poll_events` | live feed, filter by type and document, click → trace |
-| `/ledger` | `get_trial_balance`, `get_account_balance`, `explain_balance`, `get_ledger_entries` | period selector; account row expands into movements by source document |
-| `/open-items` | `list_open_items` | AP and AR tabs; overdue highlighted; link to invoice trace |
-| `/inventory` | `get_inventory`, `get_reconciliation(inventory)` | on-hand, standard cost, GL vs subledger difference |
+| `/ledger` | `get_trial_balance`, `explain_balance`, `get_ledger_entries` | period selector (all periods by default); account row expands into `by_source_type` from `explain_balance` plus the entries themselves, paged by `limit` alone. `get_account_balance` is unused — `explain_balance.balance` is the same figures |
+| `/open-items` | `list_open_items(kind, party?, overdue_only?)` | AP and AR tabs, party filter, overdue toggle — overdue is Keel's judgement against its own `as_of`, never a date comparison here. Row shape is still unrecorded (the seed has no unpaid invoices), so rows render as the columns Keel sends |
+| `/inventory` | `get_inventory(sku?)`, `get_reconciliation(inventory)` | account 1300 vs sub-ledger first, then on-hand × standard cost per SKU with Keel's own `value_cents` and `total_value_cents`; SKU links to its trace |
 | `/approvals` | `list_pending_approvals`, `approve_purchase_order`, `reject_approval`, `accept_goods`, `reject_goods` | the human inbox; goods acceptance shows expected quantities from the request and editable accepted/damaged counts per line |
 | `/trace` | `trace_document`, `search_documents`, `get_document` | search box for a document number or ULID; render `nodes` as a vertical timeline with each node's signed receipts inline and its `event_seqs` linking back to the feed; browse by document type |
 | `/receipts` | `verify_receipt`, `get_request_log`, `explain_error` | paste a receipt id or request id |
-| `/recon` | `get_reconciliation` for gr_ir, ap, ar, inventory; `get_period` | close-readiness checklist as read-only; no close button (Controller agent's job) |
+| `/recon` | `get_reconciliation` for gr_ir, ap, ar, inventory; `get_period` | close-readiness checklist as read-only, blockers and warnings verbatim; no close button (Controller agent's job) — a test asserts the page renders no such control |
 | `/settings` | — | base URL, token entry (masked), clear session |
 
 ## Stack and conventions
@@ -47,8 +47,13 @@ Keel is a headless, agent-native ERP. This repo is a **head**: a thin, replaceab
 
 1. `keelClient.ts` + Settings page + Status page. Verify against live Keel with a read-only token. ✅
 2. Events + Trace. These are the demo pages. ✅ shapes pinned against live responses
-3. Ledger, Open Items, Inventory, Recon.
+3. Ledger, Open Items, Inventory, Recon. ✅
 4. Approvals (the only write pages), with simulate-then-commit and idempotency keys.
 5. Receipts/explain_error, polish, deploy.
 
 Stop and ask if any page seems to need logic that Keel does not expose; the answer is a new Keel query tool, not console code.
+
+Two such gaps are open, both requested from the kernel, both worked around in one marked place:
+
+- **No "current period."** `PeriodPicker` lists FiscalPeriod documents and starts on whatever `search_documents(FiscalPeriod, status: open, limit: 1)` returns first. Nothing reads the browser clock.
+- **No document-type list.** `loadDocumentTypes` reads them from `search_documents`' own `VALIDATION_ERROR.details.known` — the only place Keel names them. It is the sole place the console takes data from an error, and it carries a TODO for `list_document_types`.

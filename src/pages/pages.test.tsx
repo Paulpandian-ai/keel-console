@@ -4,11 +4,16 @@
  * The pages, rendered against payloads recorded from the live facade on
  * 2026-09-10. `keelClient` is mocked; nothing here touches the network.
  */
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { KeelApiError, type ToolPayload } from '../lib/keelClient'
 import Events from './Events'
+import Inventory from './Inventory'
+import Ledger from './Ledger'
+import OpenItems from './OpenItems'
+import Recon from './Recon'
 import Status from './Status'
 import Trace from './Trace'
 
@@ -24,11 +29,63 @@ const HEALTH = {
 /** Keyed by tool name, each the `result` of a recorded response. */
 const RESULTS: Record<string, unknown> = {
   get_trial_balance: {
-    accounts: [],
+    accounts: [
+      { code: '1000', credit_cents: 0, debit_cents: 25000000, name: 'Cash', net_cents: 25000000, type: 'asset' },
+      { code: '1300', credit_cents: 0, debit_cents: 275000, name: 'Inventory', net_cents: 275000, type: 'asset' },
+      { code: '3000', credit_cents: 25275000, debit_cents: 0, name: "Owner's equity", net_cents: -25275000, type: 'equity' },
+    ],
     is_balanced: true,
     period: null,
     total_credit_cents: 25275000,
     total_debit_cents: 25275000,
+  },
+  explain_balance: {
+    account: '1300',
+    balance: { account: '1300', as_of: null, credit_cents: 0, debit_cents: 275000, net_cents: 275000 },
+    by_source_type: [{ count: 3, net_cents: 275000, source_type: 'ItemOpeningBalance' }],
+    movements: [],
+  },
+  get_ledger_entries: {
+    account: '1300',
+    count: 1,
+    period: null,
+    entries: [
+      {
+        credit_cents: 0,
+        debit_cents: 25000,
+        description: 'opening stock VALVE-2IN',
+        entry: 'JE-000001',
+        entry_id: '01M25Y1B15XT84M6TEKAW4YJ21',
+        memo: 'Opening stock 5 x VALVE-2IN @ 50.00',
+        posting_date: '2026-09-01',
+        running_net_cents: 25000,
+        source_id: '01M25Y1B15Z6PHPYWDGFB8E6S4',
+        source_type: 'ItemOpeningBalance',
+        status: 'posted',
+      },
+    ],
+  },
+  get_inventory: {
+    items: [
+      {
+        is_active: true,
+        is_stocked: true,
+        list_price_cents: 2400,
+        name: 'Flange 4 bolt',
+        on_hand_qty: 100,
+        sku: 'FLANGE-4',
+        standard_cost_cents: 1500,
+        value_cents: 150000,
+      },
+    ],
+    total_value_cents: 275000,
+  },
+  list_open_items: {
+    as_of: '2026-09-10',
+    count: 0,
+    items: [],
+    kind: 'ap',
+    total_remaining_cents: 0,
   },
   list_pending_approvals: { count: 0, pending: [] },
   get_period: {
@@ -108,10 +165,41 @@ const RESULTS: Record<string, unknown> = {
 }
 
 const RECON: Record<string, unknown> = {
-  gr_ir: { kind: 'gr_ir', difference_cents: 0, reconciled: true },
-  ap: { kind: 'ap', difference_cents: 0, reconciled: true },
-  ar: { kind: 'ar', difference_cents: 0, reconciled: true },
-  inventory: { kind: 'inventory', difference_cents: 0, reconciled: true },
+  gr_ir: {
+    by_po: [],
+    difference_cents: 0,
+    gl_1400_net_cents: 0,
+    kind: 'gr_ir',
+    reconciled: true,
+    subledger_open_cents: 0,
+  },
+  ap: {
+    control_account: '2000',
+    control_account_cents: 0,
+    difference_cents: 0,
+    kind: 'ap',
+    open_items: [],
+    reconciled: true,
+    subledger_cents: 0,
+  },
+  ar: {
+    control_account: '1200',
+    control_account_cents: 0,
+    difference_cents: 0,
+    kind: 'ar',
+    open_items: [],
+    reconciled: true,
+    subledger_cents: 0,
+  },
+  inventory: {
+    difference_cents: 0,
+    gl_1300_net_cents: 275000,
+    items: [{ on_hand_qty: 100, sku: 'FLANGE-4', standard_cost_cents: 1500, value_cents: 150000 }],
+    kind: 'inventory',
+    note: 'differences arise from purchase price variance postings and non-standard receipt costs',
+    reconciled: true,
+    subledger_value_cents: 275000,
+  },
 }
 
 const PERIOD_HITS = [
@@ -152,6 +240,10 @@ vi.mock('../lib/keelClient', async () => {
 function show(ui: React.ReactNode, path = '/') {
   return render(<MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>)
 }
+
+// vitest is not running with globals, so Testing Library's auto-cleanup is not
+// registered; without this each render would pile up in the same document.
+afterEach(cleanup)
 
 beforeEach(() => {
   sessionStorage.clear()
@@ -250,5 +342,120 @@ describe('Trace', () => {
 
     expect(await screen.findByText('NOT_FOUND')).toBeTruthy()
     expect(await screen.findByText("Document 'PO-9999' not found")).toBeTruthy()
+  })
+})
+
+describe('Ledger', () => {
+  it('renders the trial balance Keel computed, totals and all', async () => {
+    show(<Ledger />, '/ledger')
+
+    expect(await screen.findByText('Inventory')).toBeTruthy()
+    expect(await screen.findByText("Owner's equity")).toBeTruthy()
+    // Keel's own totals and balanced flag, formatted but not recomputed:
+    // account 3000's credit, then the debit and credit totals in the footer.
+    expect((await screen.findAllByText('252,750.00')).length).toBe(3)
+    expect(await screen.findByText('balanced')).toBeTruthy()
+    expect(await screen.findByText('-252,750.00')).toBeTruthy()
+  })
+
+  it('expands an account into its movements by source and its entries', async () => {
+    const user = userEvent.setup()
+    show(<Ledger />, '/ledger')
+
+    await user.click(await screen.findByText('Inventory'))
+
+    // Once as the by-source grouping, once as the entry's source column.
+    expect((await screen.findAllByText('ItemOpeningBalance')).length).toBe(2)
+    expect(await screen.findByText('2,750.00 over 3 entries')).toBeTruthy()
+    expect(await screen.findByText('JE-000001')).toBeTruthy()
+    expect(await screen.findByText('opening stock VALVE-2IN')).toBeTruthy()
+
+    const asked = query.mock.calls.filter(([tool]) => tool === 'explain_balance')
+    expect(asked[0][1]).toEqual({ account_code: '1300' })
+    const entries = query.mock.calls.filter(([tool]) => tool === 'get_ledger_entries')
+    expect(entries[0][1]).toEqual({ account_code: '1300', limit: 25 })
+  })
+})
+
+describe('Open items', () => {
+  it('shows the AP sub-ledger envelope and Keel\'s own as_of date', async () => {
+    show(<OpenItems />, '/open-items')
+
+    expect(await screen.findByText('2026-09-10')).toBeTruthy()
+    expect(await screen.findByText('Keel has no open ap items.')).toBeTruthy()
+    expect(query).toHaveBeenCalledWith(
+      'list_open_items',
+      { kind: 'ap', overdue_only: false },
+      expect.anything(),
+    )
+  })
+
+  it('asks Keel for the AR sub-ledger when that tab is chosen', async () => {
+    const user = userEvent.setup()
+    show(<OpenItems />, '/open-items')
+    await screen.findByText('2026-09-10')
+
+    await user.click(screen.getByText('Receivable'))
+
+    await waitFor(() =>
+      expect(query).toHaveBeenCalledWith(
+        'list_open_items',
+        { kind: 'ar', overdue_only: false },
+        expect.anything(),
+      ),
+    )
+  })
+
+  it('leaves the overdue judgement to Keel', async () => {
+    const user = userEvent.setup()
+    show(<OpenItems />, '/open-items')
+    await screen.findByText('2026-09-10')
+
+    await user.click(screen.getByLabelText('Overdue only'))
+
+    await waitFor(() =>
+      expect(query).toHaveBeenCalledWith(
+        'list_open_items',
+        { kind: 'ap', overdue_only: true },
+        expect.anything(),
+      ),
+    )
+  })
+})
+
+describe('Inventory', () => {
+  it('renders stock at standard cost beside the GL difference', async () => {
+    show(<Inventory />, '/inventory')
+
+    expect(await screen.findByText('FLANGE-4')).toBeTruthy()
+    expect(await screen.findByText('Flange 4 bolt')).toBeTruthy()
+    expect(await screen.findByText('15.00')).toBeTruthy()
+    // The field label, and the badge Keel's `reconciled` earns.
+    expect((await screen.findAllByText('reconciled')).length).toBe(2)
+    // Account 1300, the sub-ledger value and the stock total all 2,750.00.
+    expect((await screen.findAllByText('2,750.00')).length).toBe(3)
+    expect(await screen.findByText('0.00')).toBeTruthy()
+  })
+})
+
+describe('Close readiness', () => {
+  it('renders all four reconciliations and the period checklist', async () => {
+    show(<Recon />, '/recon')
+
+    expect(await screen.findByText('GR/IR')).toBeTruthy()
+    expect(await screen.findByText('Accounts payable')).toBeTruthy()
+    expect(await screen.findByText('Accounts receivable')).toBeTruthy()
+    expect((await screen.findAllByText('reconciled')).length).toBe(4)
+    expect(await screen.findByText('ready to close')).toBeTruthy()
+    expect(await screen.findByText('2026-09-01 → 2026-09-30')).toBeTruthy()
+  })
+
+  it('offers no way to close the period', async () => {
+    show(<Recon />, '/recon')
+    await screen.findByText('GR/IR')
+
+    const labels = screen.queryAllByRole('button').map((button) => button.textContent ?? '')
+    expect(labels.some((label) => /close/i.test(label))).toBe(false)
+    expect(query.mock.calls.map(([tool]) => tool)).not.toContain('close_period')
   })
 })

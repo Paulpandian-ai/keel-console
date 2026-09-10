@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import ErrorBlock from '../components/ErrorBlock'
 import Field from '../components/Field'
+import PeriodPicker from '../components/PeriodPicker'
 import { keel, type KeelHealth } from '../lib/keelClient'
-import { formatCents, readSearchPage, scalar, type Json } from '../lib/keelFields'
+import { formatCents, scalar, type Json } from '../lib/keelFields'
 import { useKeelQuery } from '../lib/useKeelQuery'
 import { useSession } from '../lib/useSession'
 
@@ -16,9 +17,6 @@ import { useSession } from '../lib/useSession'
 
 /** The four reconciliations Keel exposes, in the order `get_reconciliation` names them. */
 const RECON_KINDS = ['gr_ir', 'ap', 'ar', 'inventory'] as const
-
-/** `search_documents(type: 'FiscalPeriod')` caps at 500 per page; there are ~36. */
-const PERIOD_PAGE = 500
 
 function Ok({ value, trueLabel, falseLabel }: { value: unknown; trueLabel: string; falseLabel: string }) {
   if (typeof value !== 'boolean') return null
@@ -69,38 +67,9 @@ export default function Status() {
     [baseUrl, hasToken],
   )
 
-  // Keel has no "current period" tool, so the period to show is a choice, not a
-  // computation: the options and the initial pick both come from Keel.
-  const periods = useKeelQuery<Json | null>(
-    (signal) =>
-      hasToken
-        ? keel.query<Json>(
-            'search_documents',
-            { type: 'FiscalPeriod', limit: PERIOD_PAGE },
-            { signal },
-          )
-        : Promise.resolve(null),
-    [baseUrl, hasToken],
-  )
-
-  const newestOpen = useKeelQuery<Json | null>(
-    (signal) =>
-      hasToken
-        ? keel.query<Json>(
-            'search_documents',
-            { type: 'FiscalPeriod', status: 'open', limit: 1 },
-            { signal },
-          )
-        : Promise.resolve(null),
-    [baseUrl, hasToken],
-  )
-
+  // Which period to show is a choice, not a computation: PeriodPicker asks Keel
+  // for the options and for the one to start on.
   const [periodCode, setPeriodCode] = useState<string>('')
-  const suggested = newestOpen.data ? readSearchPage(newestOpen.data).hits[0]?.number : undefined
-
-  useEffect(() => {
-    if (!periodCode && suggested) setPeriodCode(suggested)
-  }, [periodCode, suggested])
 
   const period = useKeelQuery<Json | null>(
     (signal) =>
@@ -111,7 +80,6 @@ export default function Status() {
   )
 
   const env = scalar(health.data?.env)
-  const periodOptions = periods.data ? readSearchPage(periods.data).hits : []
   const balance = trialBalance.data
   const readiness = period.data?.close_readiness as Json | undefined
   const periodDoc = period.data?.period as Json | undefined
@@ -122,8 +90,6 @@ export default function Status() {
     trialBalance.reload()
     recon.reload()
     approvals.reload()
-    periods.reload()
-    newestOpen.reload()
     period.reload()
   }
 
@@ -237,28 +203,11 @@ export default function Status() {
             </h2>
 
             <div className="filters">
-              <label className="filter">
-                <span className="label">Period</span>
-                <select
-                  className="input mono"
-                  value={periodCode}
-                  onChange={(event) => setPeriodCode(event.target.value)}
-                >
-                  {!periodCode && <option value="">select a period…</option>}
-                  {periodOptions.map((hit) => (
-                    <option key={hit.id ?? hit.number} value={hit.number ?? ''}>
-                      {hit.number} — {hit.status}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <span className="muted hint">
-                Keel exposes no “current period” tool; this starts on the newest open period
-                <code className="mono"> search_documents(FiscalPeriod, status: open)</code> returns.
-              </span>
+              <PeriodPicker value={periodCode} onChange={setPeriodCode} />
+              <Link className="muted hint" to="/recon">
+                full close-readiness checklist →
+              </Link>
             </div>
-
-            {periods.error && <ErrorBlock error={periods.error} onRetry={periods.reload} />}
             {period.loading && <p className="muted">Loading…</p>}
             {period.error && <ErrorBlock error={period.error} onRetry={period.reload} />}
             {readiness && (

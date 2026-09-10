@@ -1,14 +1,22 @@
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
 import Events from './pages/Events'
+import Inventory from './pages/Inventory'
+import Ledger from './pages/Ledger'
+import OpenItems from './pages/OpenItems'
+import Recon from './pages/Recon'
 import Settings from './pages/Settings'
 import Status from './pages/Status'
 import Trace from './pages/Trace'
 import { useSession } from './lib/useSession'
 
-/** Routes shipped so far. Later build-order steps add events, ledger, etc. */
+/** Routes shipped so far. Step 4 adds /approvals, step 5 /receipts. */
 const ROUTES = [
   { to: '/', label: 'Status', end: true },
   { to: '/events', label: 'Events', end: false },
+  { to: '/ledger', label: 'Ledger', end: false },
+  { to: '/open-items', label: 'Open items', end: false },
+  { to: '/inventory', label: 'Inventory', end: false },
+  { to: '/recon', label: 'Close', end: false },
   { to: '/trace', label: 'Trace', end: false },
   { to: '/settings', label: 'Settings', end: false },
 ]
@@ -39,6 +47,10 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Status />} />
           <Route path="/events" element={<Events />} />
+          <Route path="/ledger" element={<Ledger />} />
+          <Route path="/open-items" element={<OpenItems />} />
+          <Route path="/inventory" element={<Inventory />} />
+          <Route path="/recon" element={<Recon />} />
           <Route path="/trace" element={<Trace />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />

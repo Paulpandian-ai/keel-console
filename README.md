@@ -18,7 +18,7 @@ Set the facade origin at build time with `VITE_KEEL_URL` (see `.env.example`); u
 override it at runtime in Settings. Paste a Keel bearer token in Settings — it lives in
 `sessionStorage` only and is sent as an `Authorization` header, never in a URL or a log.
 
-## Built so far — steps 1–2
+## Built so far — steps 1–3
 
 | Piece | Notes |
 |---|---|
@@ -29,10 +29,15 @@ override it at runtime in Settings. Paste a Keel bearer token in Settings — it
 | `src/lib/sse.ts` | SSE decoder. `EventSource` cannot send an `Authorization` header, so the stream is read with `fetch`. |
 | `src/lib/keelFields.ts` | The one place that reads Keel payload keys. Every key is now pinned against a live response — see below. |
 | `/events` | Live feed over `/events/stream`, falling back to polling `poll_events` every 5s. Filter by type and document; click through to trace. |
-| `src/pages/pages.test.tsx` | Status, Events and Trace rendered against the recorded payloads with a mocked `keelClient` (jsdom + Testing Library, the harness step 4's approval tests will reuse). |
+| `/ledger` | Trial balance for a chosen period (or all), each account expanding into `explain_balance`'s grouping by source document and the entries from `get_ledger_entries`, paged by `limit`. |
+| `/open-items` | AP and AR tabs over `list_open_items`, with party filter and overdue toggle — both passed to Keel, never evaluated here. |
+| `/inventory` | `get_reconciliation(inventory)` (account 1300 vs sub-ledger) above `get_inventory`'s on-hand, standard cost and value per SKU. |
+| `/recon` | Read-only close readiness: `get_period`'s checklist with blockers and warnings verbatim, plus all four reconciliations. No close button — that is the Controller agent's. |
+| `src/components/PeriodPicker.tsx` | The period a page looks at: options and the initial pick both from Keel, never from the clock. |
+| `src/pages/pages.test.tsx` | Status, Events, Trace, Ledger, Open Items, Inventory and Recon rendered against the recorded payloads with a mocked `keelClient` (jsdom + Testing Library, the harness step 4's approval tests will reuse). |
 | `/trace` | `trace_document` rendered as a vertical timeline: each node with its status, total, signed receipts (`tool`, `actor`, `signed_at`) and `event_seqs`. Browse by document type via `search_documents`. |
 
-Steps 3–5 (ledger, open items, inventory, recon, approvals, receipts) are not built yet.
+Steps 4–5 (approvals, receipts) are not built yet. Every page above is a read; the console has performed no write yet.
 
 ## Verified against the live facade
 
@@ -59,7 +64,22 @@ Every shape the console reads is recorded from
 - **Paging.** `limit` + `offset` (`search_documents`, `get_request_log`) or `after_seq` + `limit`
   (`poll_events`). There is no cursor anywhere in the catalog.
 - **Money.** Minor units in `*_cents`. `formatCents` regroups the digits for display; nothing is
-  summed, netted or compared.
+  summed, netted or compared. Totals, `is_balanced`, `running_net_cents`, `difference_cents`,
+  `value_cents` and the overdue flag are all Keel's.
+- **Ledger.** `get_trial_balance` → `{accounts:[{code, name, type, debit_cents, credit_cents,
+  net_cents}], is_balanced, period, total_*}`. `explain_balance` → `{account, period, balance,
+  by_source_type:[{source_type, count, net_cents}], movements, reversal_pairs}`.
+  `get_ledger_entries` → `{account, count, period, entries}` and pages by `limit` alone — there is
+  no offset on that tool.
+- **Inventory.** `get_inventory(sku?)` → `{items:[{sku, name, on_hand_qty, standard_cost_cents,
+  list_price_cents, value_cents, is_active, is_stocked}], total_value_cents}`.
+- **Reconciliation.** All four kinds share `{kind, reconciled, difference_cents}`; `gr_ir` adds
+  `{gl_1400_net_cents, subledger_open_cents, by_po}`, `ap`/`ar` add `{control_account,
+  control_account_cents, subledger_cents, open_items}`, `inventory` adds `{gl_1300_net_cents,
+  subledger_value_cents, items, note}`.
+- **Open items.** The envelope `{kind, as_of, count, total_remaining_cents, items}` is recorded;
+  the **rows are not** — the seeded dataset has no unpaid invoices, so `items` has only ever come
+  back empty. `/open-items` renders whatever columns Keel sends rather than inventing names.
 
 `get_system_status` is deliberately **not** used. It requires `admin:status`, and a console token
 carries no admin scope, so Keel answers `FORBIDDEN / token lacks scope 'admin:status'`. The
