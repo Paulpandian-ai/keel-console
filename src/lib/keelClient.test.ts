@@ -140,6 +140,60 @@ describe('keelClient', () => {
     expect(makeIdempotencyKey('req_abc', 'accept_goods')).toBe('console:req_abc:accept_goods')
   })
 
+  it('opens the event stream with the bearer header and a resume point', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"seq":71}\n\n'))
+        controller.close()
+      },
+    })
+    const { client, fetchMock } = clientWith(
+      () => new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+    )
+
+    const seen: unknown[] = []
+    let opened = false
+    await client.streamEvents({
+      afterSeq: 70,
+      signal: new AbortController().signal,
+      onOpen: () => {
+        opened = true
+      },
+      onFrame: (frame) => seen.push(JSON.parse(frame.data)),
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(`${BASE}/events/stream?after_seq=70`)
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer test-token')
+    expect(opened).toBe(true)
+    expect(seen).toEqual([{ seq: 71 }])
+  })
+
+  it('rejects with the Keel envelope when the stream is refused', async () => {
+    const { client } = clientWith(() => json(RECORDED.unauthorized, 401))
+
+    await expect(
+      client.streamEvents({
+        signal: new AbortController().signal,
+        onFrame: () => undefined,
+      }),
+    ).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+      message: 'bearer token with events:read required',
+      httpStatus: 401,
+    })
+  })
+
+  it('omits after_seq when there is no resume point', async () => {
+    const empty = new ReadableStream<Uint8Array>({
+      start: (controller) => controller.close(),
+    })
+    const { client, fetchMock } = clientWith(() => new Response(empty, { status: 200 }))
+
+    await client.streamEvents({ signal: new AbortController().signal, onFrame: () => undefined })
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe(`${BASE}/events/stream`)
+  })
+
   it('simulates on /api/simulate/{tool}', async () => {
     const { client, fetchMock } = clientWith(() => json({ ok: true, mode: 'simulate' }))
     await client.simulate('accept_goods', { receipt_id: 'gr_1' })

@@ -7,6 +7,7 @@
  */
 
 import { getBaseUrl, getToken } from './session'
+import { SseDecoder, type SseFrame } from './sse'
 
 /** Every Keel response carries this envelope. */
 export interface KeelEnvelope {
@@ -124,6 +125,17 @@ function requestIdOf(body: unknown): string | undefined {
   return typeof id === 'string' ? id : undefined
 }
 
+
+export interface StreamEventsOptions {
+  /** Resume point: Keel replays events after this sequence number. */
+  afterSeq?: number
+  /** Called for every decoded frame, in order. */
+  onFrame: (frame: SseFrame) => void
+  /** Called once the response headers say the stream is open. */
+  onOpen?: () => void
+  signal: AbortSignal
+}
+
 export function createKeelClient(config: KeelClientConfig) {
   async function request<T>(
     method: 'GET' | 'POST',
@@ -233,6 +245,77 @@ export function createKeelClient(config: KeelClientConfig) {
     /** Dry run of a write; returns the projected effects to show the user. */
     simulate<T>(tool: string, payload: ToolPayload = {}, options: CallOptions = {}): Promise<T> {
       return callTool<T>('simulate', tool, payload, options)
+    },
+
+    /**
+     * `GET /events/stream` as SSE. Resolves when the stream ends, rejects with a
+     * `KeelApiError` if it cannot be opened, so the caller can fall back to
+     * polling `poll_events`.
+     */
+    async streamEvents(options: StreamEventsOptions): Promise<void> {
+      const base = config.getBaseUrl()
+      const token = config.getToken()
+      const query = options.afterSeq === undefined ? '' : `?after_seq=${encodeURIComponent(options.afterSeq)}`
+      const headers: Record<string, string> = { Accept: 'text/event-stream' }
+      if (token) headers.Authorization = `Bearer ${token}`
+
+      let response: Response
+      try {
+        response = await config.fetch(`${base}/events/stream${query}`, {
+          method: 'GET',
+          headers,
+          signal: options.signal,
+        })
+      } catch (cause) {
+        throw new KeelApiError({
+          code: options.signal.aborted ? 'REQUEST_CANCELLED' : 'NETWORK_ERROR',
+          message: options.signal.aborted
+            ? 'Stream cancelled.'
+            : `Could not open the event stream at ${base}.`,
+          details: String(cause),
+          tool: 'events/stream',
+        })
+      }
+
+      if (!response.ok || !response.body) {
+        // Errors on this endpoint arrive as a normal JSON envelope.
+        const text = await response.text().catch(() => '')
+        let parsed: unknown
+        try {
+          parsed = text ? JSON.parse(text) : undefined
+        } catch {
+          parsed = undefined
+        }
+        const errorBody = parseErrorEnvelope(parsed)
+        throw new KeelApiError({
+          code: errorBody?.code ?? `HTTP_${response.status}`,
+          message: errorBody?.message ?? `Event stream unavailable (HTTP ${response.status}).`,
+          requestId: requestIdOf(parsed),
+          details: errorBody?.details ?? text.slice(0, 500),
+          httpStatus: response.status,
+          tool: 'events/stream',
+        })
+      }
+
+      options.onOpen?.()
+
+      const reader = response.body.getReader()
+      const utf8 = new TextDecoder()
+      const decoder = new SseDecoder()
+
+      try {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          for (const frame of decoder.push(utf8.decode(value, { stream: true }))) {
+            options.onFrame(frame)
+          }
+        }
+        const trailing = decoder.flush()
+        if (trailing) options.onFrame(trailing)
+      } finally {
+        reader.cancel().catch(() => {})
+      }
     },
 
     /** The write itself. Always preceded by `simulate` and a confirmation. */
