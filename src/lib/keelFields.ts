@@ -1,11 +1,11 @@
 /**
  * Field readers for Keel payloads.
  *
- * Keel owns every shape here. The facade is not reachable from the current
- * deployment, so the exact key names for events and traces are not yet
- * confirmed; each reader tries the plausible spellings and falls back to "—" in
- * the UI. **This is the only file that guesses at a payload shape** — when the
- * facade ships, correct the key lists here and nothing else changes.
+ * Keel owns every shape here. These key names are **pinned against the live
+ * facade** (headless-erp-production-0480.up.railway.app, 2026-09-10) with a
+ * token holding `*:read`, `approvals:read`, `procurement:approve`,
+ * `procurement:receive` — they are recorded, not guessed. Anything still
+ * unverified says so at its definition.
  *
  * Nothing in this file computes a value. It reads, and it formats for display.
  */
@@ -38,23 +38,40 @@ export function scalar(value: unknown): string | null {
 }
 
 export function asArray(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value
-  return []
+  return Array.isArray(value) ? value : []
+}
+
+function asObject(value: unknown): Json {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Json) : {}
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
+    return Number(value)
+  }
+  return null
+}
+
+/** Rows of a Keel list response, under the key that response uses. */
+export function rowsOf(payload: unknown, key: string): unknown[] {
+  return asArray(pick(payload, key))
 }
 
 /**
- * Find the row array in a Keel list response without caring what it is called.
+ * Money display. Keel sends minor units in `*_cents` fields and the console
+ * only ever renders them: the digits are regrouped as text, never summed,
+ * averaged or netted. Any figure that needs arithmetic comes from a Keel tool.
  */
-export function rowsOf(payload: unknown, ...keys: string[]): unknown[] {
-  const named = pick(payload, ...keys, 'items', 'rows', 'results', 'data')
-  if (Array.isArray(named)) return named
-  return Array.isArray(payload) ? payload : []
-}
-
-/** `limit`/`cursor` paging, as Keel pages. */
-export function nextCursorOf(payload: unknown): string | null {
-  const cursor = pick(payload, 'next_cursor', 'cursor', 'page.next_cursor')
-  return typeof cursor === 'string' && cursor !== '' ? cursor : null
+export function formatCents(value: unknown): string | null {
+  const cents = asNumber(value)
+  if (cents === null) return null
+  const negative = cents < 0
+  const digits = String(Math.abs(Math.trunc(cents))).padStart(3, '0')
+  const whole = digits.slice(0, -2)
+  const fraction = digits.slice(-2)
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return `${negative ? '-' : ''}${grouped}.${fraction}`
 }
 
 /** Display-only timestamp formatting. Never arithmetic on dates. */
@@ -87,102 +104,222 @@ export function formatTime(value: unknown): string | null {
 
 /* ------------------------------------------------------------------ events */
 
-/** One row in the live feed, as the console needs to render it. */
+/**
+ * One event, as `poll_events` returns it and as the SSE `data:` field carries
+ * it — the two are the same object:
+ *
+ *   {seq, type, document_type, document_id, receipt_id, actor_id, occurred_at,
+ *    payload: {document_type, document_id, number, status, receipt_id, summary}}
+ *
+ * `payload.number` and `payload.status` are null for documents that have no
+ * human number (Supplier, Customer, ApiToken); `summary` is always prose.
+ */
 export interface KeelEvent {
   seq: number | null
   type: string
   documentId: string | null
-  documentLabel: string | null
+  documentType: string | null
+  /** `payload.number` — the human document number, when the document has one. */
+  number: string | null
+  status: string | null
+  summary: string | null
+  receiptId: string | null
+  actorId: string | null
   occurredAt: string | null
   raw: Json
 }
 
 export function readEvent(raw: unknown): KeelEvent {
-  const source = (typeof raw === 'object' && raw !== null ? raw : {}) as Json
-  const seq = pick(source, 'seq', 'event_seq', 'sequence', 'id')
-  const documentId = scalar(
-    pick(source, 'document_id', 'document.id', 'doc_id', 'aggregate_id', 'entity_id'),
-  )
-  const documentLabel = scalar(
-    pick(
-      source,
-      'document_number',
-      'document.number',
-      'document_no',
-      'doc_number',
-      'document.label',
-    ),
-  )
+  const source = asObject(raw)
+  const payload = asObject(source.payload)
 
   return {
-    seq: typeof seq === 'number' ? seq : typeof seq === 'string' ? Number(seq) || null : null,
-    type: scalar(pick(source, 'type', 'event_type', 'name', 'kind')) ?? 'event',
-    documentId,
-    documentLabel,
-    occurredAt: scalar(pick(source, 'occurred_at', 'created_at', 'timestamp', 'ts', 'at')),
+    seq: asNumber(source.seq),
+    type: scalar(source.type) ?? 'event',
+    documentId: scalar(source.document_id),
+    documentType: scalar(source.document_type),
+    number: scalar(payload.number),
+    status: scalar(payload.status),
+    summary: scalar(payload.summary),
+    receiptId: scalar(source.receipt_id),
+    actorId: scalar(source.actor_id),
+    occurredAt: scalar(source.occurred_at),
     raw: source,
   }
 }
 
-/** The document reference an event points at, for the click-through to trace. */
+/**
+ * What `trace_document` should be asked for when this row is clicked. Keel
+ * resolves either a number or a ULID, and prefers the number when there is one.
+ */
 export function eventTarget(event: KeelEvent): string | null {
-  return event.documentLabel ?? event.documentId
+  return event.number ?? event.documentId
+}
+
+/** `poll_events` → `{count, events, last_seq}`. */
+export interface EventPage {
+  events: KeelEvent[]
+  lastSeq: number | null
+}
+
+export function readEventPage(payload: unknown): EventPage {
+  return {
+    events: rowsOf(payload, 'events').map(readEvent),
+    lastSeq: asNumber(pick(payload, 'last_seq')),
+  }
 }
 
 /* ------------------------------------------------------------------- trace */
 
-export interface TraceEntry {
+/** A signed receipt as `trace_document` inlines it on each node. */
+export interface TraceReceipt {
   id: string | null
-  label: string | null
-  kind: string
+  tool: string | null
+  actor: string | null
+  onBehalfOf: string | null
+  signedAt: string | null
+}
+
+function readReceipt(raw: unknown): TraceReceipt {
+  const source = asObject(raw)
+  return {
+    id: scalar(source.id),
+    tool: scalar(source.tool),
+    actor: scalar(source.actor),
+    onBehalfOf: scalar(source.on_behalf_of),
+    signedAt: scalar(source.signed_at),
+  }
+}
+
+/**
+ * A document in the chain:
+ *
+ *   {id, number, type, status, total_cents, created_at, state_version,
+ *    event_seqs: [...], receipts: [{id, tool, actor, on_behalf_of, signed_at}]}
+ *
+ * `root` carries the same fields minus `event_seqs` and `receipts`.
+ */
+export interface TraceNode {
+  id: string | null
+  number: string | null
+  type: string
   status: string | null
-  occurredAt: string | null
-  amount: string | null
-  events: Json[]
-  receipts: Json[]
+  /** Minor units, straight from Keel. Formatted for display, never summed. */
+  totalCents: number | null
+  createdAt: string | null
+  stateVersion: number | null
+  eventSeqs: number[]
+  receipts: TraceReceipt[]
   raw: Json
 }
 
-export function readTraceEntry(raw: unknown): TraceEntry {
-  const source = (typeof raw === 'object' && raw !== null ? raw : {}) as Json
+export function readTraceNode(raw: unknown): TraceNode {
+  const source = asObject(raw)
   return {
-    id: scalar(pick(source, 'id', 'document_id', 'doc_id')),
-    label: scalar(
-      pick(source, 'number', 'document_number', 'doc_number', 'label', 'name', 'id'),
-    ),
-    kind: scalar(pick(source, 'type', 'document_type', 'kind', 'doc_type')) ?? 'document',
-    status: scalar(pick(source, 'status', 'state')),
-    occurredAt: scalar(pick(source, 'occurred_at', 'created_at', 'date', 'posted_at', 'timestamp')),
-    // Money arrives formatted from Keel; the console never does arithmetic on it.
-    amount: scalar(pick(source, 'amount', 'total', 'total_amount', 'value', 'gross_amount')),
-    events: asArray(pick(source, 'events', 'event_log')) as Json[],
-    receipts: asArray(pick(source, 'receipts', 'receipt_ids', 'receipt')) as Json[],
+    id: scalar(source.id),
+    number: scalar(source.number),
+    type: scalar(source.type) ?? 'Document',
+    status: scalar(source.status),
+    totalCents: asNumber(source.total_cents),
+    createdAt: scalar(source.created_at),
+    stateVersion: asNumber(source.state_version),
+    eventSeqs: asArray(source.event_seqs)
+      .map(asNumber)
+      .filter((seq): seq is number => seq !== null),
+    receipts: asArray(source.receipts).map(readReceipt),
     raw: source,
   }
 }
 
-/** The chain of documents behind a `trace_document` response. */
-export function readTraceChain(payload: unknown): TraceEntry[] {
-  return rowsOf(payload, 'chain', 'nodes', 'steps', 'documents', 'trace', 'timeline').map(
-    readTraceEntry,
-  )
+/**
+ * An edge between two nodes. **Unverified**: every trace in the seeded dataset
+ * comes back with `edges: []`, so the key names inside an edge are the only
+ * thing on this page that has not been seen live. Read loosely and shown as
+ * "from → to" with whatever label is present.
+ */
+export interface TraceEdge {
+  from: string | null
+  to: string | null
+  label: string | null
 }
 
+export function readTraceEdge(raw: unknown): TraceEdge {
+  const source = asObject(raw)
+  return {
+    from: scalar(pick(source, 'from', 'from_id', 'source', 'parent')),
+    to: scalar(pick(source, 'to', 'to_id', 'target', 'child')),
+    label: scalar(pick(source, 'kind', 'type', 'relation', 'label')),
+  }
+}
+
+/**
+ * `trace_document` → `{requested, root, nodes, edges, journal_entry_count,
+ * reversal_journal_entries}`.
+ */
+export interface TraceGraph {
+  requested: string | null
+  root: TraceNode | null
+  nodes: TraceNode[]
+  edges: TraceEdge[]
+  journalEntryCount: number | null
+  reversalJournalEntries: Json[]
+}
+
+export function readTraceGraph(payload: unknown): TraceGraph {
+  const source = asObject(payload)
+  return {
+    requested: scalar(source.requested),
+    root: source.root ? readTraceNode(source.root) : null,
+    nodes: asArray(source.nodes).map(readTraceNode),
+    edges: asArray(source.edges).map(readTraceEdge),
+    journalEntryCount: asNumber(source.journal_entry_count),
+    reversalJournalEntries: asArray(source.reversal_journal_entries).map(asObject),
+  }
+}
+
+/* ---------------------------------------------------------------- searches */
+
+/**
+ * `search_documents` → `{type, count, offset, items}`, each item
+ * `{id, number, type, status, total_cents, created_at, state_version}`.
+ * Paged with `limit` + `offset`; there is no cursor in the Keel catalog.
+ */
 export interface SearchHit {
   id: string | null
-  label: string | null
-  kind: string | null
+  number: string | null
+  type: string | null
   status: string | null
-  occurredAt: string | null
+  totalCents: number | null
+  createdAt: string | null
 }
 
 export function readSearchHit(raw: unknown): SearchHit {
-  const source = (typeof raw === 'object' && raw !== null ? raw : {}) as Json
+  const source = asObject(raw)
   return {
-    id: scalar(pick(source, 'id', 'document_id', 'doc_id')),
-    label: scalar(pick(source, 'number', 'document_number', 'doc_number', 'label', 'name')),
-    kind: scalar(pick(source, 'type', 'document_type', 'kind')),
-    status: scalar(pick(source, 'status', 'state')),
-    occurredAt: scalar(pick(source, 'occurred_at', 'created_at', 'date')),
+    id: scalar(source.id),
+    number: scalar(source.number),
+    type: scalar(source.type),
+    status: scalar(source.status),
+    totalCents: asNumber(source.total_cents),
+    createdAt: scalar(source.created_at),
   }
+}
+
+export interface SearchPage {
+  hits: SearchHit[]
+  count: number | null
+  offset: number | null
+}
+
+export function readSearchPage(payload: unknown): SearchPage {
+  return {
+    hits: rowsOf(payload, 'items').map(readSearchHit),
+    count: asNumber(pick(payload, 'count')),
+    offset: asNumber(pick(payload, 'offset')),
+  }
+}
+
+/** What to hand `trace_document`: Keel takes a number or a ULID. */
+export function hitTarget(hit: SearchHit): string | null {
+  return hit.number ?? hit.id
 }

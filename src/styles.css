@@ -168,6 +168,7 @@ body {
 .error-head { display: flex; align-items: center; gap: 10px; }
 .error-code { color: var(--danger); font-weight: 600; }
 .error-message { margin: 0; }
+.error-advice { margin: 0; font-size: 13px; color: var(--muted); }
 .error-request-id { margin: 0; font-size: 12px; color: var(--muted); }
 .error-block pre, .raw pre {
   margin: 6px 0 0;
@@ -279,3 +280,38 @@ table.feed td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical
 }
 .tag-event { color: var(--accent); }
 .tag-receipt { color: var(--ok); }
+
+/* --------------------------------------------------------------- status */
+
+.badge-ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+
+.headline { margin: 0; display: flex; align-items: baseline; gap: 10px; }
+.headline-number { font-size: 28px; font-weight: 600; font-family: var(--mono); }
+
+.notes { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+.notes-blocker { color: var(--danger); }
+.notes-warning { color: var(--warn); }
+
+/* ---------------------------------------------------------------- events */
+
+.col-doc { white-space: nowrap; }
+.doc-type { color: var(--muted); font-size: 11px; margin-right: 6px; }
+.doc-number { overflow-wrap: anywhere; }
+.col-summary { color: var(--text); }
+.raw-meta { font-size: 12px; margin-bottom: 6px; }
+
+/* ----------------------------------------------------------------- trace */
+
+.browse { margin-top: 12px; margin-bottom: 0; }
+.node-root .node-marker { background: var(--accent); }
+.seq-chip { color: var(--muted); font-size: 11px; }
+.receipt-id { margin-left: auto; font-size: 11px; }
+.edge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}

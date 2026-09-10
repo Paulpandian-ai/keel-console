@@ -1,0 +1,254 @@
+/**
+ * @vitest-environment jsdom
+ *
+ * The pages, rendered against payloads recorded from the live facade on
+ * 2026-09-10. `keelClient` is mocked; nothing here touches the network.
+ */
+import { render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { KeelApiError, type ToolPayload } from '../lib/keelClient'
+import Events from './Events'
+import Status from './Status'
+import Trace from './Trace'
+
+const HEALTH = {
+  status: 'ok',
+  version: '0.1.0',
+  env: 'dev',
+  signing_key_id: '01M1Y420ZTB6BCVYVN1A5S6YG8',
+  event_seq: 79,
+  policy_version: 1,
+}
+
+/** Keyed by tool name, each the `result` of a recorded response. */
+const RESULTS: Record<string, unknown> = {
+  get_trial_balance: {
+    accounts: [],
+    is_balanced: true,
+    period: null,
+    total_credit_cents: 25275000,
+    total_debit_cents: 25275000,
+  },
+  list_pending_approvals: { count: 0, pending: [] },
+  get_period: {
+    close_readiness: {
+      blocked_supplier_invoices: [],
+      blockers: [],
+      draft_purchase_orders: [],
+      open_gr_ir_cents: 0,
+      pending_approvals: 0,
+      period: '2026-09',
+      ready: true,
+      status: 'open',
+      trial_balance_ok: true,
+      trial_balance_totals: { credit_cents: 25275000, debit_cents: 25275000 },
+      uninvoiced_shipment_lines: 0,
+      warnings: [],
+    },
+    period: {
+      code: '2026-09',
+      end_date: '2026-09-30',
+      id: '01M25Y1AZ4B69W0M43XQCM7G6N',
+      start_date: '2026-09-01',
+      status: 'open',
+    },
+  },
+  trace_document: {
+    edges: [],
+    journal_entry_count: 0,
+    nodes: [
+      {
+        created_at: '2026-09-10T15:12:32Z',
+        event_seqs: [65],
+        id: '01M25Y1B15Z6PHPYWDGFB8E6S4',
+        number: 'VALVE-2IN',
+        receipts: [
+          {
+            actor: 'admin:paul',
+            id: '01M25Y1B1M1XYPXJCPW6FBBP95',
+            on_behalf_of: null,
+            signed_at: '2026-09-10T15:12:32Z',
+            tool: 'create_item',
+          },
+        ],
+        state_version: 1,
+        status: null,
+        total_cents: null,
+        type: 'Item',
+      },
+    ],
+    requested: 'JE-000001',
+    reversal_journal_entries: [],
+    root: { id: '01M25Y1B15Z6PHPYWDGFB8E6S4', number: 'VALVE-2IN', type: 'Item' },
+  },
+  poll_events: {
+    count: 1,
+    events: [
+      {
+        actor_id: 'admin:paul',
+        document_id: '01M25Y1B15XT84M6TEKAW4YJ21',
+        document_type: 'JournalEntry',
+        occurred_at: '2026-09-10T15:12:32Z',
+        payload: {
+          document_id: '01M25Y1B15XT84M6TEKAW4YJ21',
+          document_type: 'JournalEntry',
+          number: 'JE-000001',
+          receipt_id: '01M25Y1B1M1XYPXJCPW6FBBP95',
+          status: 'posted',
+          summary: 'Journal entry JE-000001 posted',
+        },
+        receipt_id: '01M25Y1B1M1XYPXJCPW6FBBP95',
+        seq: 66,
+        type: 'journal_entry.posted',
+      },
+    ],
+    last_seq: 66,
+  },
+}
+
+const RECON: Record<string, unknown> = {
+  gr_ir: { kind: 'gr_ir', difference_cents: 0, reconciled: true },
+  ap: { kind: 'ap', difference_cents: 0, reconciled: true },
+  ar: { kind: 'ar', difference_cents: 0, reconciled: true },
+  inventory: { kind: 'inventory', difference_cents: 0, reconciled: true },
+}
+
+const PERIOD_HITS = [
+  { id: 'p1', number: '2026-09', status: 'open', type: 'FiscalPeriod', total_cents: null },
+  { id: 'p2', number: '2026-08', status: 'closed', type: 'FiscalPeriod', total_cents: null },
+]
+
+const query = vi.fn(async (tool: string, payload: ToolPayload = {}) => {
+  if (tool === 'get_reconciliation') return RECON[String(payload.kind)]
+  if (tool === 'search_documents') {
+    const items = payload.status ? PERIOD_HITS.filter((p) => p.status === payload.status) : PERIOD_HITS
+    return { type: payload.type, count: items.length, offset: 0, items }
+  }
+  if (tool in RESULTS) return RESULTS[tool]
+  throw new KeelApiError({ code: 'NOT_FOUND', message: `unknown tool ${tool}`, tool })
+})
+
+const streamEvents = vi.fn(async () => {
+  // The stream is refused, so the feed falls back to polling poll_events.
+  throw new KeelApiError({ code: 'HTTP_502', message: 'stream unavailable', httpStatus: 502 })
+})
+
+vi.mock('../lib/keelClient', async () => {
+  const actual = await vi.importActual<typeof import('../lib/keelClient')>('../lib/keelClient')
+  return {
+    ...actual,
+    keel: {
+      health: async () => HEALTH,
+      query: (...args: Parameters<typeof query>) => query(...args),
+      streamEvents: () => streamEvents(),
+      simulate: vi.fn(),
+      commit: vi.fn(),
+    },
+    loadDocumentTypes: async () => ['JournalEntry', 'PurchaseOrder'],
+  }
+})
+
+function show(ui: React.ReactNode, path = '/') {
+  return render(<MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>)
+}
+
+beforeEach(() => {
+  sessionStorage.clear()
+  sessionStorage.setItem('keel.token', 'test-token')
+  query.mockClear()
+})
+
+describe('Status', () => {
+  it('renders health, books, reconciliations, approvals and period readiness', async () => {
+    show(<Status />)
+
+    expect(await screen.findByText('01M1Y420ZTB6BCVYVN1A5S6YG8')).toBeTruthy()
+    // "balanced" is both the field label and the badge Keel's `is_balanced` earns.
+    expect((await screen.findAllByText('balanced')).length).toBe(2)
+    // Minor units are regrouped for display, not summed: debit and credit both.
+    expect((await screen.findAllByText('252,750.00')).length).toBe(2)
+    expect((await screen.findAllByText('reconciled')).length).toBe(4)
+    expect(await screen.findByText('nothing waiting on a human')).toBeTruthy()
+    // The period starts on the newest open period Keel returns.
+    expect(await screen.findByText('ready')).toBeTruthy()
+    expect(await screen.findByText('2026-09-01 → 2026-09-30')).toBeTruthy()
+  })
+
+  it('never calls get_system_status', async () => {
+    show(<Status />)
+    await screen.findAllByText('balanced')
+    expect(query.mock.calls.map(([tool]) => tool)).not.toContain('get_system_status')
+  })
+
+  it('shows a scope refusal verbatim instead of hiding the card', async () => {
+    query.mockImplementationOnce(async () => {
+      throw new KeelApiError({
+        code: 'FORBIDDEN',
+        message: "token lacks scope 'finance:read' required by get_trial_balance",
+        requestId: '01M268FX3XE85GE0DAJNSQHY1J',
+        retryAdvice: 'Obtain a token with the required scope.',
+      })
+    })
+    show(<Status />)
+
+    expect(await screen.findByText('FORBIDDEN')).toBeTruthy()
+    expect(await screen.findByText('01M268FX3XE85GE0DAJNSQHY1J')).toBeTruthy()
+    expect(await screen.findByText('Obtain a token with the required scope.')).toBeTruthy()
+  })
+})
+
+describe('Events', () => {
+  it('falls back to polling and renders the event with its summary', async () => {
+    show(<Events />)
+
+    // Once in the row, once as an option in the type filter.
+    expect((await screen.findAllByText('journal_entry.posted')).length).toBe(2)
+    expect(await screen.findByText('Journal entry JE-000001 posted')).toBeTruthy()
+    expect(await screen.findByText('66')).toBeTruthy()
+    await waitFor(() => expect(screen.getByText('polling every 5s')).toBeTruthy())
+  })
+
+  it('arrives filtered when the URL names a document', async () => {
+    show(<Events />, '/events?doc=NOTHING-MATCHES')
+    await waitFor(() => expect(screen.getByText('0 of 1')).toBeTruthy())
+  })
+})
+
+describe('Trace', () => {
+  it('renders the chain with the receipt that signed each node', async () => {
+    show(<Trace />, '/trace?doc=JE-000001')
+
+    const chain = (await screen.findByText('Chain')).closest('section') as HTMLElement
+    expect(within(chain).getByText('VALVE-2IN')).toBeTruthy()
+    expect(within(chain).getByText('Item')).toBeTruthy()
+    expect(within(chain).getByText('create_item')).toBeTruthy()
+    expect(within(chain).getByText('admin:paul')).toBeTruthy()
+    expect(within(chain).getByText('#65')).toBeTruthy()
+  })
+
+  it('asks trace_document for the reference in the URL', async () => {
+    show(<Trace />, '/trace?doc=JE-000001')
+    await screen.findByText('Chain')
+    expect(query).toHaveBeenCalledWith(
+      'trace_document',
+      { id_or_number: 'JE-000001' },
+      expect.anything(),
+    )
+  })
+
+  it('shows the NOT_FOUND Keel returns for an unknown document', async () => {
+    query.mockImplementationOnce(async () => {
+      throw new KeelApiError({
+        code: 'NOT_FOUND',
+        message: "Document 'PO-9999' not found",
+        requestId: '01M268MKM04CXKEBFYFZ7XS6P9',
+        details: { type: 'Document', ref: 'PO-9999' },
+      })
+    })
+    show(<Trace />, '/trace?doc=PO-9999')
+
+    expect(await screen.findByText('NOT_FOUND')).toBeTruthy()
+    expect(await screen.findByText("Document 'PO-9999' not found")).toBeTruthy()
+  })
+})

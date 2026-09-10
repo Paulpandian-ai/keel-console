@@ -19,7 +19,15 @@ export interface KeelEnvelope {
 export interface KeelErrorBody {
   code: string
   message: string
+  /**
+   * Present on some errors and not others, verified live: `VALIDATION_ERROR`
+   * carries `{errors, expected_fields, required_fields}`, `NOT_FOUND` on a
+   * document carries `{type, ref}`, `FORBIDDEN` carries `{required_scope}`.
+   * `NOT_FOUND` for an unknown tool carries no `details` and no `request_id`.
+   */
   details?: unknown
+  /** Every error envelope observed so far carries this. Shown verbatim. */
+  retry_advice?: string
 }
 
 export interface KeelErrorEnvelope extends KeelEnvelope {
@@ -27,7 +35,17 @@ export interface KeelErrorEnvelope extends KeelEnvelope {
   error: KeelErrorBody
 }
 
-/** `GET /healthz` — the one unauthenticated endpoint. */
+/**
+ * Success envelope of every tool call: `{ok, mode, request_id, tool, result}`,
+ * verified live against the facade. The payload a page wants is `result`.
+ */
+export interface KeelResultEnvelope<T> extends KeelEnvelope {
+  ok: true
+  tool?: string
+  result: T
+}
+
+/** `GET /healthz` — the one unauthenticated endpoint, and the only bare body. */
 export interface KeelHealth {
   status: string
   version?: string
@@ -37,15 +55,20 @@ export interface KeelHealth {
   policy_version?: number
 }
 
-/** Keel pages with `limit` + `cursor`; the console never loads everything. */
+/**
+ * Keel pages with `limit` + `offset` (`search_documents`, `get_request_log`) or
+ * with `after_seq` + `limit` (`poll_events`). There is no cursor anywhere in the
+ * catalog. The console never loads everything.
+ */
 export interface KeelPageRequest {
   limit?: number
-  cursor?: string | null
+  offset?: number
 }
 
+/** What a paged list response carries back: the window it answered with. */
 export interface KeelPageInfo {
-  next_cursor?: string | null
-  has_more?: boolean
+  count?: number
+  offset?: number
 }
 
 export type ToolPayload = Record<string, unknown>
@@ -59,6 +82,8 @@ export class KeelApiError extends Error {
   readonly code: string
   readonly requestId?: string
   readonly details?: unknown
+  /** Keel's own guidance on what to do next. Shown verbatim. */
+  readonly retryAdvice?: string
   readonly httpStatus?: number
   readonly tool?: string
 
@@ -67,6 +92,7 @@ export class KeelApiError extends Error {
     message: string
     requestId?: string
     details?: unknown
+    retryAdvice?: string
     httpStatus?: number
     tool?: string
   }) {
@@ -75,6 +101,7 @@ export class KeelApiError extends Error {
     this.code = init.code
     this.requestId = init.requestId
     this.details = init.details
+    this.retryAdvice = init.retryAdvice
     this.httpStatus = init.httpStatus
     this.tool = init.tool
   }
@@ -116,7 +143,13 @@ function parseErrorEnvelope(body: unknown): KeelErrorBody | null {
   if (typeof error !== 'object' || error === null) return null
   const { code, message } = error as { code?: unknown; message?: unknown }
   if (typeof code !== 'string' || typeof message !== 'string') return null
-  return { code, message, details: (error as { details?: unknown }).details }
+  const advice = (error as { retry_advice?: unknown }).retry_advice
+  return {
+    code,
+    message,
+    details: (error as { details?: unknown }).details,
+    retry_advice: typeof advice === 'string' ? advice : undefined,
+  }
 }
 
 function requestIdOf(body: unknown): string | undefined {
@@ -199,7 +232,10 @@ export function createKeelClient(config: KeelClientConfig) {
     const errorBody = parseErrorEnvelope(parsed)
     if (errorBody) {
       throw new KeelApiError({
-        ...errorBody,
+        code: errorBody.code,
+        message: errorBody.message,
+        details: errorBody.details,
+        retryAdvice: errorBody.retry_advice,
         requestId: requestIdOf(parsed),
         httpStatus: response.status,
         tool,
@@ -227,8 +263,8 @@ export function createKeelClient(config: KeelClientConfig) {
     tool: string,
     payload: ToolPayload,
     options: CallOptions,
-  ): Promise<T> {
-    return request<T>('POST', `/api/${kind}/${tool}`, payload, options, tool)
+  ): Promise<KeelResultEnvelope<T>> {
+    return request<KeelResultEnvelope<T>>('POST', `/api/${kind}/${tool}`, payload, options, tool)
   }
 
   return {
@@ -237,13 +273,25 @@ export function createKeelClient(config: KeelClientConfig) {
       return request<KeelHealth>('GET', '/healthz', undefined, options, 'healthz')
     },
 
-    /** Read tools: `POST /api/query/{tool}`. */
-    query<T>(tool: string, payload: ToolPayload = {}, options: CallOptions = {}): Promise<T> {
-      return callTool<T>('query', tool, payload, options)
+    /**
+     * Read tools: `POST /api/query/{tool}`. Resolves to the envelope's `result`,
+     * which is the only part a read page has any use for.
+     */
+    async query<T>(tool: string, payload: ToolPayload = {}, options: CallOptions = {}): Promise<T> {
+      const envelope = await callTool<T>('query', tool, payload, options)
+      return envelope.result
     },
 
-    /** Dry run of a write; returns the projected effects to show the user. */
-    simulate<T>(tool: string, payload: ToolPayload = {}, options: CallOptions = {}): Promise<T> {
+    /**
+     * Dry run of a write; returns the projected effects to show the user. Unlike
+     * `query` this hands back the whole envelope, because the commit that
+     * follows needs its `request_id` for the idempotency key.
+     */
+    simulate<T>(
+      tool: string,
+      payload: ToolPayload = {},
+      options: CallOptions = {},
+    ): Promise<KeelResultEnvelope<T>> {
       return callTool<T>('simulate', tool, payload, options)
     },
 
@@ -292,6 +340,7 @@ export function createKeelClient(config: KeelClientConfig) {
           message: errorBody?.message ?? `Event stream unavailable (HTTP ${response.status}).`,
           requestId: requestIdOf(parsed),
           details: errorBody?.details ?? text.slice(0, 500),
+          retryAdvice: errorBody?.retry_advice,
           httpStatus: response.status,
           tool: 'events/stream',
         })
@@ -319,7 +368,11 @@ export function createKeelClient(config: KeelClientConfig) {
     },
 
     /** The write itself. Always preceded by `simulate` and a confirmation. */
-    commit<T>(tool: string, payload: ToolPayload, options: CommitOptions): Promise<T> {
+    commit<T>(
+      tool: string,
+      payload: ToolPayload,
+      options: CommitOptions,
+    ): Promise<KeelResultEnvelope<T>> {
       const { idempotencyKey, simulationId, ...rest } = options
       return callTool<T>(
         'commit',
@@ -336,6 +389,45 @@ export function createKeelClient(config: KeelClientConfig) {
 }
 
 export type KeelClient = ReturnType<typeof createKeelClient>
+
+/**
+ * The document types Keel knows about.
+ *
+ * `search_documents` requires a `type`, but no query tool in the catalog returns
+ * the list of legal types — the only component that will name them is
+ * `search_documents` itself, which rejects an unknown type with
+ * `details.known: [...]`. So the console asks it once, lazily, and caches the
+ * answer for the page view. The list is still Keel's, never the console's.
+ *
+ * This is the one place in the console that leans on an error for data.
+ *
+ * TODO: replace with `list_document_types` (requested from the kernel) — or
+ * type enums on `list_capabilities` — and delete this function once it lands.
+ */
+const UNKNOWN_TYPE_PROBE = '__console_type_probe__'
+let cachedDocumentTypes: string[] | null = null
+
+export async function loadDocumentTypes(
+  client: KeelClient,
+  options: CallOptions = {},
+): Promise<string[]> {
+  if (cachedDocumentTypes) return cachedDocumentTypes
+  try {
+    await client.query('search_documents', { type: UNKNOWN_TYPE_PROBE, limit: 1 }, options)
+  } catch (caught) {
+    if (isKeelApiError(caught)) {
+      const known = (caught.details as { known?: unknown } | undefined)?.known
+      if (Array.isArray(known)) {
+        cachedDocumentTypes = known.map(String)
+        return cachedDocumentTypes
+      }
+    }
+    throw caught
+  }
+  // Keel accepted the probe: it is no longer rejecting unknown types, so there
+  // is nothing to read here and the caller should fall back to a plain input.
+  return []
+}
 
 /** The app-wide client, bound to the current session. */
 export const keel: KeelClient = createKeelClient({

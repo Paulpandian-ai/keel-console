@@ -1,8 +1,9 @@
 import type { KeelApiError } from '../lib/keelClient'
 
 /**
- * Errors are shown exactly as Keel sent them: `code`, `message`, and the
- * `request_id` so it can be pasted into `explain_error`.
+ * Errors are shown exactly as Keel sent them: `code`, `message`, Keel's own
+ * `retry_advice`, and the `request_id` so it can be pasted into `explain_error`.
+ * Nothing here is reworded or interpreted.
  */
 export default function ErrorBlock({
   error,
@@ -23,6 +24,7 @@ export default function ErrorBlock({
         )}
       </div>
       <p className="error-message">{error.message}</p>
+      {error.retryAdvice && <p className="error-advice">{error.retryAdvice}</p>}
       {error.requestId && (
         <p className="error-request-id">
           request_id <code>{error.requestId}</code>

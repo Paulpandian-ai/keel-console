@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { KeelApiError, keel } from './keelClient'
-import { readEvent, rowsOf, type KeelEvent } from './keelFields'
+import { readEvent, readEventPage, type KeelEvent } from './keelFields'
 import { useSession } from './useSession'
 
 export type FeedMode = 'idle' | 'connecting' | 'live' | 'polling' | 'error'
 
 const POLL_INTERVAL_MS = 5_000
+/** `poll_events` accepts 1-1000; the console asks for a page, not everything. */
+const POLL_LIMIT = 100
 const MAX_BUFFERED = 500
 
 /** Auth failures are not a transport problem: polling would fail identically. */
@@ -71,13 +73,14 @@ export function useEventFeed(enabled: boolean) {
     async function poll() {
       if (stopped) return
       try {
+        // poll_events(after_seq?, limit?) -> {count, events, last_seq}, ascending.
         const payload = await keel.query<unknown>(
           'poll_events',
-          { after_seq: lastSeq.current ?? 0, limit: 100 },
+          { after_seq: lastSeq.current ?? 0, limit: POLL_LIMIT },
           { signal: controller.signal },
         )
         if (stopped) return
-        ingest(rowsOf(payload, 'events').map(readEvent))
+        ingest(readEventPage(payload).events)
         setError(null)
         setMode('polling')
         pollTimer = setTimeout(poll, POLL_INTERVAL_MS)
@@ -101,13 +104,12 @@ export function useEventFeed(enabled: boolean) {
           onFrame: (frame) => {
             if (stopped || frame.data === '') return
             try {
-              const parsed: unknown = JSON.parse(frame.data)
-              ingest(rowsOf(parsed, 'events').length > 0
-                ? rowsOf(parsed, 'events').map(readEvent)
-                : [readEvent(parsed)])
+              // Each frame carries exactly one event object in `data:`, the same
+              // shape `poll_events` returns; `event:` repeats its type.
+              ingest([readEvent(JSON.parse(frame.data))])
             } catch {
               // A frame that is not JSON still belongs in the feed.
-              ingest([readEvent({ type: frame.event ?? 'message', message: frame.data })])
+              ingest([readEvent({ type: frame.event ?? 'message', payload: { summary: frame.data } })])
             }
           },
         })

@@ -1,5 +1,5 @@
-import { Fragment, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import ErrorBlock from '../components/ErrorBlock'
 import { eventTarget, formatTime, scalar } from '../lib/keelFields'
 import { useEventFeed, type FeedMode } from '../lib/useEventFeed'
@@ -16,10 +16,22 @@ const MODE_LABEL: Record<FeedMode, string> = {
 export default function Events() {
   const { hasToken } = useSession()
   const navigate = useNavigate()
+  const [params] = useSearchParams()
   const [running, setRunning] = useState(true)
-  const [typeFilter, setTypeFilter] = useState('')
-  const [documentFilter, setDocumentFilter] = useState('')
+  // Filters are view state, seeded from the URL so /events?doc=… arrives filtered
+  // (that is the link the Trace page hands back).
+  const [typeFilter, setTypeFilter] = useState(() => params.get('type') ?? '')
+  const [documentFilter, setDocumentFilter] = useState(() => params.get('doc') ?? '')
   const [expanded, setExpanded] = useState<number | null>(null)
+
+  const docParam = params.get('doc')
+  const typeParam = params.get('type')
+  useEffect(() => {
+    if (docParam !== null) setDocumentFilter(docParam)
+  }, [docParam])
+  useEffect(() => {
+    if (typeParam !== null) setTypeFilter(typeParam)
+  }, [typeParam])
 
   const feed = useEventFeed(hasToken && running)
 
@@ -33,8 +45,9 @@ export default function Events() {
     return feed.events.filter((event) => {
       if (typeFilter && event.type !== typeFilter) return false
       if (!needle) return true
-      const target = `${event.documentLabel ?? ''} ${event.documentId ?? ''}`.toLowerCase()
-      return target.includes(needle)
+      const haystack =
+        `${event.number ?? ''} ${event.documentId ?? ''} ${event.documentType ?? ''}`.toLowerCase()
+      return haystack.includes(needle)
     })
   }, [feed.events, typeFilter, documentFilter])
 
@@ -118,6 +131,7 @@ export default function Events() {
                 <th className="col-time">time</th>
                 <th>type</th>
                 <th>document</th>
+                <th>summary</th>
                 <th className="col-actions" />
               </tr>
             </thead>
@@ -136,7 +150,17 @@ export default function Events() {
                       <td>
                         <code className="event-type">{event.type}</code>
                       </td>
-                      <td className="mono">{target ?? <span className="muted">—</span>}</td>
+                      <td className="mono col-doc">
+                        {event.documentType && <span className="doc-type">{event.documentType}</span>}
+                        {event.number ? (
+                          <span className="doc-number">{event.number}</span>
+                        ) : (
+                          <span className="muted doc-number">{event.documentId ?? '—'}</span>
+                        )}
+                      </td>
+                      <td className="col-summary">
+                        {event.summary ?? <span className="muted">—</span>}
+                      </td>
                       <td className="col-actions">
                         {target && (
                           <button
@@ -154,7 +178,19 @@ export default function Events() {
                     </tr>
                     {expanded === key && (
                       <tr>
-                        <td colSpan={5} className="raw-cell">
+                        <td colSpan={6} className="raw-cell">
+                          <div className="row raw-meta">
+                            <span className="muted">actor</span>
+                            <code className="mono">{event.actorId ?? '—'}</code>
+                            <span className="muted">receipt</span>
+                            <code className="mono">{event.receiptId ?? '—'}</code>
+                            {event.status && (
+                              <>
+                                <span className="muted">status</span>
+                                <code className="mono">{event.status}</code>
+                              </>
+                            )}
+                          </div>
                           <pre>{JSON.stringify(event.raw, null, 2)}</pre>
                         </td>
                       </tr>
