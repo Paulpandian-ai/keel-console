@@ -260,6 +260,38 @@ describe('keelClient', () => {
     })
   })
 
+  it('rejects with FORBIDDEN when a valid token lacks events:read on the stream', async () => {
+    // Since 2026-09-11 the stream answers 403 for a valid token without the
+    // scope (401 stays for a missing or invalid token). Same envelope shape as
+    // a FORBIDDEN query, so the feed can show the scope and must not fall back
+    // to poll_events, which wants the same scope.
+    const { client } = clientWith(() =>
+      json(
+        {
+          ok: false,
+          mode: 'stream',
+          request_id: '01M285DA1P89G38Q97QQYV8VW4',
+          error: {
+            code: 'FORBIDDEN',
+            message: "token lacks scope 'events:read' required by the events stream",
+            details: { required_scope: 'events:read' },
+            retry_advice: 'Obtain a token with the required scope.',
+          },
+        },
+        403,
+      ),
+    )
+
+    await expect(
+      client.streamEvents({ signal: new AbortController().signal, onFrame: () => undefined }),
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      httpStatus: 403,
+      requestId: '01M285DA1P89G38Q97QQYV8VW4',
+      details: { required_scope: 'events:read' },
+    })
+  })
+
   it('omits after_seq when there is no resume point', async () => {
     const empty = new ReadableStream<Uint8Array>({
       start: (controller) => controller.close(),

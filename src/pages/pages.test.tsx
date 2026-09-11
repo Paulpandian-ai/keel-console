@@ -11,6 +11,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { KeelApiError, type ToolPayload } from '../lib/keelClient'
+import { resetWhoamiCache } from '../lib/useWhoami'
 import Events from './Events'
 import Inventory from './Inventory'
 import Ledger from './Ledger'
@@ -215,6 +216,29 @@ const PERIOD_HITS = [
   { id: 'p2', number: '2026-08', status: 'closed', type: 'FiscalPeriod', total_cents: null },
 ]
 
+/** `whoami`, recorded live 2026-09-11 for the console token. */
+const WHOAMI = {
+  expires_at: null,
+  kind: 'human',
+  on_behalf_of: null,
+  scopes: ['*:read', 'approvals:write', 'procurement:approve', 'procurement:receive'],
+  subject: 'human:paul-console',
+  token_id: '01M267Y8BX4CFRAVYN8CWR69G0',
+  tool_count: 30,
+  tools: [
+    'accept_goods', 'approve_purchase_order', 'describe_tool', 'explain_balance', 'explain_error',
+    'find_duplicates', 'get_account_balance', 'get_agent_activity', 'get_current_period',
+    'get_document', 'get_inventory', 'get_ledger_entries', 'get_period', 'get_reconciliation',
+    'get_request_log', 'get_trial_balance', 'list_capabilities', 'list_document_types',
+    'list_open_items', 'list_pending_approvals', 'poll_events', 'receive_goods', 'reject_approval',
+    'reject_goods', 'replay_simulate', 'request_approval', 'search_documents', 'trace_document',
+    'verify_receipt', 'whoami',
+  ],
+}
+
+/** Swapped per test to model a token Keel lists fewer tools for. */
+let whoami: unknown = WHOAMI
+
 /** `list_open_items`, recorded live 2026-09-11: AP is empty, AR has one row. */
 const OPEN_ITEMS: Record<string, unknown> = {
   ap: { as_of: '2026-09-11', count: 0, items: [], kind: 'ap', total_remaining_cents: 0 },
@@ -330,7 +354,8 @@ const RECEIPTS: Record<string, unknown> = {
   },
 }
 
-const query = vi.fn(async (tool: string, payload: ToolPayload = {}) => {
+async function answer(tool: string, payload: ToolPayload = {}): Promise<unknown> {
+  if (tool === 'whoami') return whoami
   if (tool === 'get_reconciliation') return RECON[String(payload.kind)]
   if (tool === 'verify_receipt') return RECEIPTS[String(payload.receipt_id)]
   if (tool === 'explain_error') return EXPLAINED_FORBIDDEN
@@ -342,7 +367,9 @@ const query = vi.fn(async (tool: string, payload: ToolPayload = {}) => {
   }
   if (tool in RESULTS) return RESULTS[tool]
   throw new KeelApiError({ code: 'NOT_FOUND', message: `unknown tool ${tool}`, tool })
-})
+}
+
+const query = vi.fn(answer)
 
 const streamEvents = vi.fn(async () => {
   // The stream is refused, so the feed falls back to polling poll_events.
@@ -375,8 +402,20 @@ afterEach(cleanup)
 beforeEach(() => {
   sessionStorage.clear()
   sessionStorage.setItem('keel.token', 'test-token')
-  query.mockClear()
+  whoami = WHOAMI
+  resetWhoamiCache()
+  query.mockReset()
+  query.mockImplementation(answer)
+  streamEvents.mockClear()
 })
+
+/** Make one tool fail with a recorded Keel error; every other call is unchanged. */
+function failing(tool: string, error: KeelApiError) {
+  query.mockImplementation(async (name, payload) => {
+    if (name === tool) throw error
+    return answer(name, payload)
+  })
+}
 
 describe('Status', () => {
   it('renders health, books, reconciliations, approvals and period readiness', async () => {
@@ -401,14 +440,15 @@ describe('Status', () => {
   })
 
   it('shows a scope refusal verbatim instead of hiding the card', async () => {
-    query.mockImplementationOnce(async () => {
-      throw new KeelApiError({
+    failing(
+      'get_trial_balance',
+      new KeelApiError({
         code: 'FORBIDDEN',
         message: "token lacks scope 'finance:read' required by get_trial_balance",
         requestId: '01M268FX3XE85GE0DAJNSQHY1J',
         retryAdvice: 'Obtain a token with the required scope.',
-      })
-    })
+      }),
+    )
     show(<Status />)
 
     expect(await screen.findByText('FORBIDDEN')).toBeTruthy()
@@ -457,14 +497,15 @@ describe('Trace', () => {
   })
 
   it('shows the NOT_FOUND Keel returns for an unknown document', async () => {
-    query.mockImplementationOnce(async () => {
-      throw new KeelApiError({
+    failing(
+      'trace_document',
+      new KeelApiError({
         code: 'NOT_FOUND',
         message: "Document 'PO-9999' not found",
         requestId: '01M268MKM04CXKEBFYFZ7XS6P9',
         details: { type: 'Document', ref: 'PO-9999' },
-      })
-    })
+      }),
+    )
     show(<Trace />, '/trace?doc=PO-9999')
 
     expect(await screen.findByText('NOT_FOUND')).toBeTruthy()
@@ -679,5 +720,46 @@ describe('Receipts', () => {
         expect.anything(),
       ),
     )
+  })
+})
+
+describe('Scope gating from whoami', () => {
+  it('names the token\'s subject in the top bar once Keel has answered', async () => {
+    const { default: App } = await import('../App')
+    render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <App />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('human:paul-console')).toBeTruthy()
+  })
+
+  it('does not open the event feed when Keel does not list poll_events', async () => {
+    whoami = { ...WHOAMI, tools: WHOAMI.tools.filter((tool) => tool !== 'poll_events') };
+    show(<Events />)
+
+    expect(await screen.findByText(/does not list/)).toBeTruthy()
+    expect(await screen.findByText('poll_events')).toBeTruthy()
+    // Neither the stream nor polling was attempted.
+    await waitFor(() => expect(query).toHaveBeenCalledWith('whoami'))
+    expect(streamEvents).not.toHaveBeenCalled()
+    expect(query.mock.calls.map(([tool]) => tool)).not.toContain('poll_events')
+  })
+
+  it('skips a read Keel does not allow and says so, instead of asking and failing', async () => {
+    whoami = { ...WHOAMI, tools: WHOAMI.tools.filter((tool) => tool !== 'list_open_items') }
+    show(<OpenItems />, '/open-items')
+
+    expect(await screen.findByText(/does not list/)).toBeTruthy()
+    expect(query.mock.calls.map(([tool]) => tool)).not.toContain('list_open_items')
+  })
+
+  it('offers everything and lets Keel refuse when whoami itself is unavailable', async () => {
+    failing('whoami', new KeelApiError({ code: 'NOT_FOUND', message: 'unknown tool whoami' }))
+    show(<OpenItems />, '/open-items')
+
+    // An older kernel: the console must not lock itself out.
+    expect(await screen.findByText('2026-09-11')).toBeTruthy()
+    expect(screen.queryByText(/does not list/)).toBeNull()
   })
 })

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import ErrorBlock from '../components/ErrorBlock'
+import ScopeNote from '../components/ScopeNote'
 import Field from '../components/Field'
 import { keel, loadDocumentTypes } from '../lib/keelClient'
 import {
@@ -13,6 +14,7 @@ import {
 } from '../lib/keelFields'
 import { useKeelQuery } from '../lib/useKeelQuery'
 import { useSession } from '../lib/useSession'
+import { useWhoami } from '../lib/useWhoami'
 
 /** A document reference in the URL, e.g. /trace?doc=JE-000001. Never a token. */
 const DOC_PARAM = 'doc'
@@ -22,6 +24,7 @@ const BROWSE_LIMIT = 25
 
 export default function Trace() {
   const { baseUrl, hasToken } = useSession()
+  const { can, ready } = useWhoami()
   const [params, setParams] = useSearchParams()
   const docRef = params.get(DOC_PARAM) ?? ''
   const browseType = params.get(TYPE_PARAM) ?? ''
@@ -41,10 +44,10 @@ export default function Trace() {
 
   const trace = useKeelQuery<unknown>(
     (signal) =>
-      docRef && hasToken
+      docRef && hasToken && ready && can('trace_document') !== false
         ? keel.query<unknown>('trace_document', { id_or_number: docRef }, { signal })
         : Promise.resolve(null),
-    [baseUrl, docRef, hasToken],
+    [baseUrl, docRef, hasToken, can, ready],
   )
 
   // The type list is Keel's; it is only fetched once the user browses.
@@ -55,14 +58,14 @@ export default function Trace() {
 
   const browse = useKeelQuery<unknown>(
     (signal) =>
-      hasToken && browseType
+      hasToken && ready && browseType && can('search_documents') !== false
         ? keel.query<unknown>(
             'search_documents',
             { type: browseType, limit: BROWSE_LIMIT },
             { signal },
           )
         : Promise.resolve(null),
-    [baseUrl, hasToken, browseType],
+    [baseUrl, hasToken, browseType, can, ready],
   )
 
   const graph = trace.data ? readTraceGraph(trace.data) : null
@@ -88,10 +91,17 @@ export default function Trace() {
             onChange={(event) => setDraft(event.target.value)}
             aria-label="Document number or id"
           />
-          <button type="submit" className="btn" disabled={!draft.trim()}>
+          <button
+            type="submit"
+            className="btn"
+            disabled={!draft.trim() || can('trace_document') === false}
+          >
             Trace
           </button>
         </form>
+        {hasToken && can('trace_document') === false && (
+          <ScopeNote tool="trace_document" what="documents cannot be traced" />
+        )}
         {!hasToken ? (
           <p className="muted hint">
             No token in this session. <Link to="/settings">Add one in Settings</Link> to search.

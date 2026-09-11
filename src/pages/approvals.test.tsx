@@ -16,6 +16,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { KeelApiError, type CommitOptions, type ToolPayload } from '../lib/keelClient'
+import { resetWhoamiCache } from '../lib/useWhoami'
 import Approvals from './Approvals'
 
 /* ------------------------------------------------------ recorded payloads */
@@ -252,10 +253,32 @@ const COMMIT = {
 
 /* ------------------------------------------------------------------ mocks */
 
+/** `whoami`, recorded live 2026-09-11 for the console token. */
+const WHOAMI = {
+  expires_at: null,
+  kind: 'human',
+  on_behalf_of: null,
+  scopes: ['*:read', 'approvals:write', 'procurement:approve', 'procurement:receive'],
+  subject: 'human:paul-console',
+  token_id: '01M267Y8BX4CFRAVYN8CWR69G0',
+  tool_count: 30,
+  tools: [
+    'accept_goods', 'approve_purchase_order', 'describe_tool', 'explain_balance', 'explain_error',
+    'find_duplicates', 'get_account_balance', 'get_agent_activity', 'get_current_period',
+    'get_document', 'get_inventory', 'get_ledger_entries', 'get_period', 'get_reconciliation',
+    'get_request_log', 'get_trial_balance', 'list_capabilities', 'list_document_types',
+    'list_open_items', 'list_pending_approvals', 'poll_events', 'receive_goods', 'reject_approval',
+    'reject_goods', 'replay_simulate', 'request_approval', 'search_documents', 'trace_document',
+    'verify_receipt', 'whoami',
+  ],
+}
+
+let whoami: unknown = WHOAMI
 let pending: unknown = { count: 2, pending: [PO_REQUEST, GOODS_REQUEST] }
 let simulation: unknown = APPROVE_SIMULATION
 
 const query = vi.fn(async (tool: string) => {
+  if (tool === 'whoami') return whoami
   if (tool === 'list_pending_approvals') return pending
   throw new KeelApiError({ code: 'NOT_FOUND', message: `unknown tool ${tool}`, tool })
 })
@@ -305,6 +328,8 @@ afterEach(cleanup)
 beforeEach(() => {
   sessionStorage.clear()
   sessionStorage.setItem('keel.token', 'test-token')
+  whoami = WHOAMI
+  resetWhoamiCache()
   pending = { count: 2, pending: [PO_REQUEST, GOODS_REQUEST] }
   simulation = APPROVE_SIMULATION
   query.mockClear()
@@ -332,6 +357,30 @@ describe('Approvals inbox', () => {
 
     expect(await screen.findByText(/No token in this session/)).toBeTruthy()
     expect(query).not.toHaveBeenCalled()
+  })
+})
+
+describe('Scope gating from whoami', () => {
+  it('disables a decision Keel does not list for this token, and says which tool', async () => {
+    whoami = {
+      ...WHOAMI,
+      scopes: ['*:read', 'procurement:receive'],
+      tools: WHOAMI.tools.filter(
+        (tool) => tool !== 'approve_purchase_order' && tool !== 'reject_approval',
+      ),
+    }
+    show()
+    const po = await card('po')
+    const goods = await card('goods')
+
+    // The PO decision is out of reach; goods acceptance is not.
+    await waitFor(() =>
+      expect((within(po).getByText('Approve') as HTMLButtonElement).disabled).toBe(true),
+    )
+    expect(within(po).getByText('approve_purchase_order')).toBeTruthy()
+    expect(within(po).getByText('reject_approval')).toBeTruthy()
+    expect((within(goods).getByText('Accept goods') as HTMLButtonElement).disabled).toBe(false)
+    expect(simulate).not.toHaveBeenCalled()
   })
 })
 

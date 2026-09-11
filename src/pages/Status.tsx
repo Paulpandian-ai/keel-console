@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import ErrorBlock from '../components/ErrorBlock'
+import ScopeNote from '../components/ScopeNote'
 import Field from '../components/Field'
 import PeriodPicker from '../components/PeriodPicker'
 import { keel, type KeelHealth } from '../lib/keelClient'
 import { formatCents, scalar, type Json } from '../lib/keelFields'
 import { useKeelQuery } from '../lib/useKeelQuery'
 import { useSession } from '../lib/useSession'
+import { useWhoami } from '../lib/useWhoami'
 
 /**
  * `get_system_status` is deliberately absent from this page. It requires the
@@ -42,29 +44,34 @@ function Notes({ items, tone }: { items: unknown; tone: 'blocker' | 'warning' })
 
 export default function Status() {
   const { baseUrl, hasToken } = useSession()
+  const { can, ready } = useWhoami()
 
   const health = useKeelQuery<KeelHealth>((signal) => keel.health({ signal }), [baseUrl])
 
   const trialBalance = useKeelQuery<Json | null>(
     (signal) =>
-      hasToken ? keel.query<Json>('get_trial_balance', {}, { signal }) : Promise.resolve(null),
-    [baseUrl, hasToken],
+      hasToken && ready && can('get_trial_balance') !== false
+        ? keel.query<Json>('get_trial_balance', {}, { signal })
+        : Promise.resolve(null),
+    [baseUrl, hasToken, can, ready],
   )
 
   const recon = useKeelQuery<Json[] | null>(
     (signal) =>
-      hasToken
+      hasToken && ready && can('get_reconciliation') !== false
         ? Promise.all(
             RECON_KINDS.map((kind) => keel.query<Json>('get_reconciliation', { kind }, { signal })),
           )
         : Promise.resolve(null),
-    [baseUrl, hasToken],
+    [baseUrl, hasToken, can, ready],
   )
 
   const approvals = useKeelQuery<Json | null>(
     (signal) =>
-      hasToken ? keel.query<Json>('list_pending_approvals', {}, { signal }) : Promise.resolve(null),
-    [baseUrl, hasToken],
+      hasToken && ready && can('list_pending_approvals') !== false
+        ? keel.query<Json>('list_pending_approvals', {}, { signal })
+        : Promise.resolve(null),
+    [baseUrl, hasToken, can, ready],
   )
 
   // Which period to show is a choice, not a computation: PeriodPicker asks Keel
@@ -73,10 +80,10 @@ export default function Status() {
 
   const period = useKeelQuery<Json | null>(
     (signal) =>
-      hasToken && periodCode
+      hasToken && ready && periodCode && can('get_period') !== false
         ? keel.query<Json>('get_period', { period_code: periodCode }, { signal })
         : Promise.resolve(null),
-    [baseUrl, hasToken, periodCode],
+    [baseUrl, hasToken, periodCode, can, ready],
   )
 
   const env = scalar(health.data?.env)
@@ -140,6 +147,7 @@ export default function Status() {
             <h2>
               Books <span className="tool">get_trial_balance</span>
             </h2>
+            {can('get_trial_balance') === false && <ScopeNote tool="get_trial_balance" />}
             {trialBalance.loading && <p className="muted">Loading…</p>}
             {trialBalance.error && (
               <ErrorBlock error={trialBalance.error} onRetry={trialBalance.reload} />
@@ -161,6 +169,7 @@ export default function Status() {
             <h2>
               Reconciliation <span className="tool">get_reconciliation</span>
             </h2>
+            {can('get_reconciliation') === false && <ScopeNote tool="get_reconciliation" />}
             {recon.loading && <p className="muted">Loading…</p>}
             {recon.error && <ErrorBlock error={recon.error} onRetry={recon.reload} />}
             {recon.data && (
@@ -185,6 +194,9 @@ export default function Status() {
             <h2>
               Approvals waiting <span className="tool">list_pending_approvals</span>
             </h2>
+            {can('list_pending_approvals') === false && (
+              <ScopeNote tool="list_pending_approvals" />
+            )}
             {approvals.loading && <p className="muted">Loading…</p>}
             {approvals.error && <ErrorBlock error={approvals.error} onRetry={approvals.reload} />}
             {approvals.data && (
@@ -208,6 +220,7 @@ export default function Status() {
                 full close-readiness checklist →
               </Link>
             </div>
+            {can('get_period') === false && <ScopeNote tool="get_period" />}
             {period.loading && <p className="muted">Loading…</p>}
             {period.error && <ErrorBlock error={period.error} onRetry={period.reload} />}
             {readiness && (

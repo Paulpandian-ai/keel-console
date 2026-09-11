@@ -5,7 +5,7 @@ Keel is a headless, agent-native ERP. This repo is a **head**: a thin, replaceab
 ## Non-negotiables
 
 1. **No business logic here.** Every number, status, and decision comes from Keel. The console never computes totals, balances, variances, or due dates. If a screen needs a derived value, ask for a Keel tool that returns it.
-2. **No privileged path.** The console uses exactly the same bearer tokens and scopes as agents. What a user can see or do is whatever their token allows; the UI hides or disables what the token cannot do, and Keel is the enforcer.
+2. **No privileged path.** The console uses exactly the same bearer tokens and scopes as agents. What a user can see or do is whatever their token allows; the UI hides or disables what the token cannot do — from `whoami`'s own `tools` list, never from the console's reading of scope strings — and Keel is the enforcer.
 3. **Token stays in the browser.** The user pastes a Keel token once; it lives in `sessionStorage` only. Never in the repo, never in a build artifact, never in a URL, never logged.
 4. **Read-mostly.** The only writes the console performs are the human decisions: `approve_purchase_order`, `reject_approval`, `accept_goods`, `reject_goods`. Each shows the projected effects from Keel first (simulate) and asks for confirmation before commit, with a fresh idempotency key per commit (`console:<request_id>:<tool>`).
 5. **Keep vendor names out.** No AI-vendor SDKs, no cloud-provider SDKs. This is a static site that calls one API.
@@ -14,10 +14,11 @@ Keel is a headless, agent-native ERP. This repo is a **head**: a thin, replaceab
 
 - Base URL from `VITE_KEEL_URL` at build time (default `https://headless-erp-production-0480.up.railway.app`), overridable by the user in Settings.
 - `POST {base}/api/query/{tool}` for read tools, `POST {base}/api/simulate/{tool}` and `POST {base}/api/commit/{tool}` for writes. Body is the tool payload; commit bodies also carry `idempotency_key` and optional `simulation_id`. Header `Authorization: Bearer <token>`.
-- Events: `GET {base}/events/stream?after_seq=N` (SSE) with the same header, falling back to polling `poll_events` every 5 s if SSE is unavailable.
+- Events: `GET {base}/events/stream?after_seq=N` (SSE) with the same header, falling back to polling `poll_events` every 5 s if SSE is unavailable. The stream answers **401** for a missing or invalid token and **403 FORBIDDEN** (`details.required_scope: events:read`) for a valid token without the scope; neither falls back to polling, because `poll_events` wants the same scope. The page does not open the stream at all when `whoami` does not list `poll_events`.
+- `whoami()` — any authenticated token — returns `{subject, kind, scopes, tools, tool_count, token_id, expires_at, on_behalf_of}`. `tools` is Keel's list of every tool the token may call. `useWhoami` asks once per session and every page gates its reads and controls on `can(tool)`; while the answer is in flight nothing is asked, and if `whoami` itself fails (an older kernel) the console fails open and lets Keel refuse verbatim.
 - Success responses for **query** are `{ok, mode, request_id, tool, result}` — the tool's payload is `result`, which `keelClient.query` unwraps. **`simulate` and `commit` are flat: they have no `result` key at all.** A simulate is `{ok, mode, request_id, simulation_id, tool, validation:{errors, warnings}, policy, would_commit, commit_would_fail_with, projected_effects, state_versions, expires_at, compensating_tool}`; a commit is `{ok, mode, status, request_id, tool, document, effects, events_emitted, journal_entry, receipt, policy, warnings}`. Both hand back the whole envelope: the commit's idempotency key is built from the simulate's `request_id`, and `status` is `applied` or, when Keel recognises the key, `replayed` with the original receipt and no new events.
 - Errors are `{ok:false, mode, request_id, error:{code, message, details?, retry_advice}}`. Show `error.code`, `error.message` and `retry_advice` verbatim, plus `request_id` so it can be pasted into `explain_error`. `details` varies by code — `required_scope` on FORBIDDEN, `{errors, expected_fields, required_fields}` on VALIDATION_ERROR, `{type, ref}` on a missing document. An unknown *tool* answers NOT_FOUND with no `request_id` at all.
-- `list_capabilities` returns all 67 tools with their signature and required scope, and `describe_tool(name)` returns one tool's JSON Schema. Read those before guessing a payload.
+- `list_capabilities` returns all 68 tools with their signature and required scope, and `describe_tool(name)` returns one tool's JSON Schema. Read those before guessing a payload.
 
 ## Pages
 
@@ -33,6 +34,7 @@ Keel is a headless, agent-native ERP. This repo is a **head**: a thin, replaceab
 | `/receipts` | `verify_receipt`, `get_request_log`, `explain_error` | paste a receipt id (`?receipt=`) or request id (`?request=`); every `request_id` in an `ErrorBlock` and every receipt id on Trace, Events and Approvals links here. `verify_receipt` on an unknown id is **not an error** — Keel answers `ok: true, valid: false, reason`. The log pages by `limit` + `offset` with `mode` / `tool` / `error_code` filters |
 | `/recon` | `get_reconciliation` for gr_ir, ap, ar, inventory; `get_period` | close-readiness checklist as read-only, blockers and warnings verbatim; no close button (Controller agent's job) — a test asserts the page renders no such control |
 | `/settings` | — | base URL, token entry (masked), clear session |
+| topbar | `whoami` | the token's `subject` once Keel has answered; hover for scopes and tool count |
 
 ## Stack and conventions
 
@@ -58,6 +60,4 @@ Both gaps that were open have since been closed by the kernel, and the workaroun
 - **`get_current_period`** now names the current period against Keel's own `as_of`. `PeriodPicker` asks it instead of taking whatever `search_documents(FiscalPeriod, status: open, limit: 1)` happened to return first. Nothing reads the browser clock.
 - **`list_document_types`** now returns `{type, identifier_field, number_prefix, date_field, order_by, party_field, filters}` per type. `loadDocumentTypes` reads it like any other query; the console no longer takes data from an error anywhere.
 
-One gap is open:
-
-- **The console cannot learn its own token's scopes.** Non-negotiable #2 asks the UI to disable what the token cannot do, but no query tool names the scopes a token holds — they appear only in a `FORBIDDEN` error's `details.granted`, and reading that would put the console back to taking data from an error. So `/approvals` offers every decision and lets the simulate be the gate: Keel's `would_commit` decides whether a commit is offered, and a refusal is shown verbatim. A `whoami` / `describe_token` query tool would let the buttons be disabled up front instead. Requested from the kernel.
+No gap is open. The last one — the console could not learn its own token's scopes — closed when the kernel shipped `whoami`; `/approvals`, `/events`, `/receipts` and every read page now disable up front what Keel's `tools` list leaves out, and say which tool it was.

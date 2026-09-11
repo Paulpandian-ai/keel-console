@@ -1,31 +1,34 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import ErrorBlock from '../components/ErrorBlock'
+import ScopeNote from '../components/ScopeNote'
 import Field from '../components/Field'
 import { keel } from '../lib/keelClient'
 import { formatCents, readInventory, readReconciliation, scalar, type Json } from '../lib/keelFields'
 import { useKeelQuery } from '../lib/useKeelQuery'
 import { useSession } from '../lib/useSession'
+import { useWhoami } from '../lib/useWhoami'
 
 export default function Inventory() {
   const { baseUrl, hasToken } = useSession()
+  const { can, ready } = useWhoami()
   const [sku, setSku] = useState('')
   const [appliedSku, setAppliedSku] = useState('')
 
   const inventory = useKeelQuery<Json | null>(
     (signal) =>
-      hasToken
+      hasToken && ready && can('get_inventory') !== false
         ? keel.query<Json>('get_inventory', appliedSku ? { sku: appliedSku } : {}, { signal })
         : Promise.resolve(null),
-    [baseUrl, hasToken, appliedSku],
+    [baseUrl, hasToken, appliedSku, can, ready],
   )
 
   const recon = useKeelQuery<Json | null>(
     (signal) =>
-      hasToken
+      hasToken && ready && can('get_reconciliation') !== false
         ? keel.query<Json>('get_reconciliation', { kind: 'inventory' }, { signal })
         : Promise.resolve(null),
-    [baseUrl, hasToken],
+    [baseUrl, hasToken, can, ready],
   )
 
   const stock = inventory.data ? readInventory(inventory.data) : null
@@ -111,6 +114,9 @@ export default function Inventory() {
             No token in this session. <Link to="/settings">Add one in Settings</Link> to read
             inventory — it needs the <code className="scope">inventory:read</code> scope.
           </p>
+        )}
+        {hasToken && can('get_inventory') === false && (
+          <ScopeNote tool="get_inventory" what="stock cannot be read" />
         )}
         {inventory.loading && <p className="muted">Loading…</p>}
         {inventory.error && <ErrorBlock error={inventory.error} onRetry={inventory.reload} />}

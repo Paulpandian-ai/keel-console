@@ -518,3 +518,11 @@ table.feed tfoot th.col-money { text-align: right; font-family: var(--mono); }
 .receipt-id:hover {
   color: var(--accent);
 }
+
+.scope-note {
+  margin: 0.6rem 0 0;
+  padding: 0.5rem 0.7rem;
+  border-left: 3px solid var(--warn);
+  background: var(--panel-2);
+  border-radius: 0 8px 8px 0;
+}

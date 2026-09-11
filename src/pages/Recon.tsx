@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import RawRows from '../components/RawRows'
 import ErrorBlock from '../components/ErrorBlock'
+import ScopeNote from '../components/ScopeNote'
 import Field from '../components/Field'
 import PeriodPicker from '../components/PeriodPicker'
 import { keel } from '../lib/keelClient'
@@ -15,6 +16,7 @@ import {
 } from '../lib/keelFields'
 import { useKeelQuery } from '../lib/useKeelQuery'
 import { useSession } from '../lib/useSession'
+import { useWhoami } from '../lib/useWhoami'
 
 /** The four reconciliations, with the fields each kind carries. */
 const KINDS = [
@@ -68,24 +70,25 @@ const KINDS = [
 
 export default function Recon() {
   const { baseUrl, hasToken } = useSession()
+  const { can, ready } = useWhoami()
   const [period, setPeriod] = useState('')
 
   const reconciliations = useKeelQuery<Json[] | null>(
     (signal) =>
-      hasToken
+      hasToken && ready && can('get_reconciliation') !== false
         ? Promise.all(
             KINDS.map(({ kind }) => keel.query<Json>('get_reconciliation', { kind }, { signal })),
           )
         : Promise.resolve(null),
-    [baseUrl, hasToken],
+    [baseUrl, hasToken, can, ready],
   )
 
   const periodQuery = useKeelQuery<Json | null>(
     (signal) =>
-      hasToken && period
+      hasToken && ready && period && can('get_period') !== false
         ? keel.query<Json>('get_period', { period_code: period }, { signal })
         : Promise.resolve(null),
-    [baseUrl, hasToken, period],
+    [baseUrl, hasToken, period, can, ready],
   )
 
   const readiness = periodQuery.data ? readPeriodReadiness(periodQuery.data) : null
@@ -119,6 +122,9 @@ export default function Recon() {
             No token in this session. <Link to="/settings">Add one in Settings</Link> to read close
             readiness.
           </p>
+        )}
+        {hasToken && can('get_period') === false && (
+          <ScopeNote tool="get_period" what="close readiness cannot be read" />
         )}
         {periodQuery.loading && <p className="muted">Loading…</p>}
         {periodQuery.error && <ErrorBlock error={periodQuery.error} onRetry={periodQuery.reload} />}
@@ -185,6 +191,9 @@ export default function Recon() {
         <h2>
           Reconciliations <span className="tool">get_reconciliation</span>
         </h2>
+        {hasToken && can('get_reconciliation') === false && (
+          <ScopeNote tool="get_reconciliation" what="the reconciliations cannot be read" />
+        )}
         {reconciliations.loading && <p className="muted">Loading…</p>}
         {reconciliations.error && (
           <ErrorBlock error={reconciliations.error} onRetry={reconciliations.reload} />

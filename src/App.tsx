@@ -10,6 +10,7 @@ import Settings from './pages/Settings'
 import Status from './pages/Status'
 import Trace from './pages/Trace'
 import { useSession } from './lib/useSession'
+import { useWhoami } from './lib/useWhoami'
 
 /** Every route the console has. */
 const ROUTES = [
@@ -27,6 +28,7 @@ const ROUTES = [
 
 export default function App() {
   const { hasToken } = useSession()
+  const { identity } = useWhoami()
 
   return (
     <div className="app">
@@ -42,8 +44,12 @@ export default function App() {
             </NavLink>
           ))}
         </nav>
-        <div className={`token-pill ${hasToken ? 'is-set' : 'is-unset'}`}>
-          {hasToken ? 'token set' : 'no token'}
+        <div
+          className={`token-pill ${hasToken ? 'is-set' : 'is-unset'}`}
+          title={identity ? `${identity.scopes.join(', ')} · ${identity.tools.length} tools` : undefined}
+        >
+          {/* `whoami`'s subject once Keel has answered; never the token itself. */}
+          {hasToken ? (identity?.subject ?? 'token set') : 'no token'}
         </div>
       </header>
 

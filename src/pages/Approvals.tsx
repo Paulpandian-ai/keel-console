@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import Effects from '../components/Effects'
 import ErrorBlock from '../components/ErrorBlock'
+import ScopeNote from '../components/ScopeNote'
 import Field from '../components/Field'
 import {
   KeelApiError,
@@ -23,6 +24,7 @@ import {
 } from '../lib/keelFields'
 import { useKeelQuery } from '../lib/useKeelQuery'
 import { useSession } from '../lib/useSession'
+import { useWhoami, type Can } from '../lib/useWhoami'
 
 /**
  * The human inbox: the only page in the console that writes.
@@ -48,11 +50,14 @@ type Phase = 'simulating' | 'confirm' | 'committing' | 'done'
 
 export default function Approvals() {
   const { baseUrl, hasToken } = useSession()
+  const { can, ready } = useWhoami()
 
   const pending = useKeelQuery<Json | null>(
     (signal) =>
-      hasToken ? keel.query<Json>('list_pending_approvals', {}, { signal }) : Promise.resolve(null),
-    [baseUrl, hasToken],
+      hasToken && ready && can('list_pending_approvals') !== false
+        ? keel.query<Json>('list_pending_approvals', {}, { signal })
+        : Promise.resolve(null),
+    [baseUrl, hasToken, can, ready],
   )
 
   const [decision, setDecision] = useState<Decision | null>(null)
@@ -139,6 +144,9 @@ export default function Approvals() {
             <code className="scope">procurement:receive</code>, and Keel enforces both.
           </p>
         )}
+        {hasToken && can('list_pending_approvals') === false && (
+          <ScopeNote tool="list_pending_approvals" what="the inbox cannot be read" />
+        )}
         {pending.loading && <p className="muted">Loading…</p>}
         {pending.error && <ErrorBlock error={pending.error} onRetry={pending.reload} />}
 
@@ -168,6 +176,8 @@ export default function Approvals() {
             simulation={simulation}
             outcome={outcome}
             failure={failure}
+            can={can}
+            ready={ready}
             onDecide={simulate}
             onConfirm={commit}
             onDismiss={dismiss}
@@ -188,6 +198,8 @@ function ApprovalCard({
   simulation,
   outcome,
   failure,
+  can,
+  ready,
   onDecide,
   onConfirm,
   onDismiss,
@@ -199,6 +211,10 @@ function ApprovalCard({
   simulation: Simulation | null
   outcome: CommitOutcome | null
   failure: KeelApiError | null
+  /** Keel's answer to "may this token call that tool", from `whoami`. */
+  can: Can
+  /** `whoami` has answered (or failed); until then no decision is offered. */
+  ready: boolean
   onDecide: (decision: Decision) => void
   onConfirm: () => void
   onDismiss: () => void
@@ -207,7 +223,7 @@ function ApprovalCard({
   const [comment, setComment] = useState('')
   const requestId = request.id ?? ''
   const target = approvalTarget(request)
-  const busy = open && (phase === 'simulating' || phase === 'committing')
+  const busy = !ready || (open && (phase === 'simulating' || phase === 'committing'))
 
   // Goods acceptance arrives with the quantities the agent expected; the human
   // edits what actually turned up. Keel works out short, over and the value.
@@ -220,6 +236,12 @@ function ApprovalCard({
       note: '',
     })),
   )
+
+  const rejectTool = request.kind === 'goods_acceptance' ? 'reject_goods' : 'reject_approval'
+  const decideTool = request.kind === 'po_approval' ? 'approve_purchase_order' : 'accept_goods'
+  // `false` disables; `null` (whoami unknown) leaves Keel to refuse verbatim.
+  const mayDecide = can(decideTool) !== false
+  const mayReject = can(rejectTool) !== false
 
   const acceptedLines = counts.map((line) => ({
     sku: line.sku,
@@ -358,7 +380,7 @@ function ApprovalCard({
             <button
               type="button"
               className="btn"
-              disabled={busy || !target}
+              disabled={busy || !target || !mayDecide}
               onClick={() =>
                 onDecide({
                   requestId,
@@ -388,7 +410,7 @@ function ApprovalCard({
             <button
               type="button"
               className="btn"
-              disabled={busy || !countsValid}
+              disabled={busy || !countsValid || !mayDecide}
               onClick={() =>
                 onDecide({
                   requestId,
@@ -420,11 +442,11 @@ function ApprovalCard({
         <button
           type="button"
           className="btn btn-danger"
-          disabled={busy || reason.trim() === ''}
+          disabled={busy || reason.trim() === '' || !mayReject}
           onClick={() =>
             onDecide({
               requestId,
-              tool: request.kind === 'goods_acceptance' ? 'reject_goods' : 'reject_approval',
+              tool: rejectTool,
               payload: { request_id: requestId, reason: reason.trim() },
               verb: request.kind === 'goods_acceptance' ? 'Reject goods' : 'Reject approval',
               destructive: true,
@@ -434,6 +456,11 @@ function ApprovalCard({
           Reject
         </button>
       </div>
+
+      {(request.kind === 'po_approval' || request.kind === 'goods_acceptance') && !mayDecide && (
+        <ScopeNote tool={decideTool} what="this cannot be approved from here" />
+      )}
+      {!mayReject && <ScopeNote tool={rejectTool} what="this cannot be rejected from here" />}
 
       {request.kind !== 'po_approval' && request.kind !== 'goods_acceptance' && (
         <p className="muted hint">

@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import ErrorBlock from '../components/ErrorBlock'
+import ScopeNote from '../components/ScopeNote'
 import { eventTarget, formatTime, scalar } from '../lib/keelFields'
 import { useEventFeed, type FeedMode } from '../lib/useEventFeed'
 import { useSession } from '../lib/useSession'
+import { useWhoami } from '../lib/useWhoami'
 
 const MODE_LABEL: Record<FeedMode, string> = {
   idle: 'paused',
@@ -33,7 +35,11 @@ export default function Events() {
     if (typeParam !== null) setTypeFilter(typeParam)
   }, [typeParam])
 
-  const feed = useEventFeed(hasToken && running)
+  const { can, ready } = useWhoami()
+  // `poll_events` and `/events/stream` want the same scope, `events:read`. If
+  // Keel says the token cannot poll, it cannot stream either: do not try.
+  const canRead = can('poll_events') !== false
+  const feed = useEventFeed(hasToken && running && ready && canRead)
 
   const types = useMemo(
     () => [...new Set(feed.events.map((event) => event.type))].sort(),
@@ -78,6 +84,12 @@ export default function Events() {
         </section>
       )}
 
+      {hasToken && !canRead && (
+        <section className="card">
+          <ScopeNote tool="poll_events" what="the event stream cannot be read" />
+        </section>
+      )}
+
       {feed.error && (
         <section className="card">
           <ErrorBlock error={feed.error} onRetry={feed.reconnect} />
@@ -117,11 +129,13 @@ export default function Events() {
 
         {feed.events.length === 0 ? (
           <p className="muted empty">
-            {hasToken
-              ? running
-                ? 'Waiting for events…'
-                : 'Feed paused.'
-              : 'Nothing to show without a token.'}
+            {!hasToken
+              ? 'Nothing to show without a token.'
+              : !canRead
+                ? 'Nothing to show with this token.'
+                : running
+                  ? 'Waiting for events…'
+                  : 'Feed paused.'}
           </p>
         ) : (
           <table className="feed">

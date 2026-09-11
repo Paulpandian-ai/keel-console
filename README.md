@@ -41,6 +41,7 @@ override it at runtime in Settings. Paste a Keel bearer token in Settings — it
 | `src/components/Effects.tsx` | What a write would do, or has just done — Keel returns the same object for `simulate.projected_effects` and `commit.effects`. |
 | `src/pages/approvals.test.tsx` | The write path against recorded envelopes: no commit without a confirmed simulation, the key derived from that simulation, and the per-line goods counts. |
 
+| `src/lib/useWhoami.ts` | `whoami`, once per session, shared by every page. `can(tool)` is Keel's `tools` list; pages hold their reads until it answers, disable what it leaves out, and fail open only if `whoami` itself is unavailable. |
 | `/receipts` | `verify_receipt` for a receipt id, `explain_error` for a request id, and the paged `get_request_log` with mode / tool / error-code filters. Every `request_id` shown on an error, and every receipt id on Trace, Events and Approvals, links here. |
 
 ## Verified against the live facade
@@ -107,6 +108,12 @@ Every shape the console reads is recorded from
   started_at, payload, state_snapshot}`. `explain_error(request_id)` returns the same row plus
   `explanation`, Keel's own sentence — and answers for successful requests too ("nothing to
   explain").
+- **Identity.** `whoami` → `{subject, kind, scopes, tools, tool_count, token_id, expires_at,
+  on_behalf_of}`; any authenticated token may call it. `tools` names every tool the token may
+  call and is the only thing the console gates on.
+- **Event stream auth.** `/events/stream` answers 401 for a missing or invalid token and 403
+  `FORBIDDEN` with `details.required_scope: events:read` for a valid token without the scope. The
+  feed shows either verbatim and does not fall back to `poll_events`, which wants the same scope.
 - **Goods acceptance.** `details.counted` gives `{sku, po_line_id, expected_qty, qty, damaged_qty,
   short_qty, over_qty, unit_cost_cents, account, note}`. The console sends `accepted_lines` with
   the counts a human typed; `short_qty`, `over_qty`, the journal entry and the value all come back
@@ -128,13 +135,11 @@ are deleted:
   `loadDocumentTypes` reads it like any other query, so the console no longer takes data from an
   error anywhere.
 
-One gap remains: **the console cannot learn its own token's scopes.** They appear only in a
-`FORBIDDEN` error's `details.granted`, and reading that would reintroduce the pattern just
-removed. So `/approvals` offers every decision and lets Keel be the gate — `would_commit` on the
-simulation decides whether a commit is offered, and a refusal is shown verbatim. A `whoami` /
-`describe_token` query tool would let the buttons be disabled up front.
+The last gap — the console could not learn its own token's scopes — closed when the kernel
+shipped `whoami`. Every page now disables up front what its `tools` list leaves out, and the top
+bar names the token's subject.
 
-Useful for the next step: `list_capabilities` returns all 67 tools with signature and scope, and
+Useful for the next step: `list_capabilities` returns all 68 tools with signature and scope, and
 `describe_tool(name)` returns one tool's JSON Schema.
 
 ## Deploy

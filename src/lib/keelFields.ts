@@ -1193,3 +1193,38 @@ export function readRequestLogPage(payload: unknown): RequestLogPage {
     requests: asArray(source.requests).map(readRequestLogEntry),
   }
 }
+
+/* ------------------------------------------------------------------ whoami */
+
+/**
+ * `whoami()` → `{subject, kind, scopes, tools, tool_count, token_id,
+ * expires_at, on_behalf_of}`, pinned live 2026-09-11. Any authenticated token
+ * may call it.
+ *
+ * `tools` is Keel's own list of every tool this token may call. That list —
+ * not the console's reading of `scopes` — is what decides whether a control is
+ * offered: non-negotiable #2 says the UI disables what the token cannot do,
+ * and this is Keel saying which those are.
+ */
+export interface Identity {
+  subject: string | null
+  kind: string | null
+  tokenId: string | null
+  expiresAt: string | null
+  onBehalfOf: string | null
+  scopes: string[]
+  tools: string[]
+}
+
+export function readIdentity(payload: unknown): Identity {
+  const source = asObject(payload)
+  return {
+    subject: scalar(source.subject),
+    kind: scalar(source.kind),
+    tokenId: scalar(source.token_id),
+    expiresAt: scalar(source.expires_at),
+    onBehalfOf: scalar(source.on_behalf_of),
+    scopes: readStrings(source.scopes),
+    tools: readStrings(source.tools),
+  }
+}

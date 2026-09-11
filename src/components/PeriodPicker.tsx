@@ -4,6 +4,7 @@ import { keel } from '../lib/keelClient'
 import { readCurrentPeriod, readSearchPage, type Json } from '../lib/keelFields'
 import { useKeelQuery } from '../lib/useKeelQuery'
 import { useSession } from '../lib/useSession'
+import { useWhoami } from '../lib/useWhoami'
 
 /** `search_documents` accepts 1-500 per page; the ledger has ~36 periods. */
 const PERIOD_PAGE = 500
@@ -28,25 +29,26 @@ export default function PeriodPicker({
   allowAll?: boolean
 }) {
   const { baseUrl, hasToken } = useSession()
+  const { can, ready } = useWhoami()
 
   const periods = useKeelQuery<Json | null>(
     (signal) =>
-      hasToken
+      hasToken && ready && can('search_documents') !== false
         ? keel.query<Json>(
             'search_documents',
             { type: 'FiscalPeriod', limit: PERIOD_PAGE },
             { signal },
           )
         : Promise.resolve(null),
-    [baseUrl, hasToken],
+    [baseUrl, hasToken, can, ready],
   )
 
   const current = useKeelQuery<Json | null>(
     (signal) =>
-      hasToken && !allowAll
+      hasToken && ready && !allowAll && can('get_current_period') !== false
         ? keel.query<Json>('get_current_period', {}, { signal })
         : Promise.resolve(null),
-    [baseUrl, hasToken, allowAll],
+    [baseUrl, hasToken, allowAll, can, ready],
   )
 
   // Keel's answer for "now". `nearest_open_period` is what it falls back to

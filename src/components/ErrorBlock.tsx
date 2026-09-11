@@ -25,6 +25,12 @@ export default function ErrorBlock({
         )}
       </div>
       <p className="error-message">{error.message}</p>
+      {/* FORBIDDEN carries the scope Keel wanted; a 403 from the event stream too. */}
+      {requiredScope(error) && (
+        <p className="error-advice">
+          requires scope <code className="scope">{requiredScope(error)}</code>
+        </p>
+      )}
       {error.retryAdvice && <p className="error-advice">{error.retryAdvice}</p>}
       {error.requestId && (
         <p className="error-request-id">
@@ -42,4 +48,12 @@ export default function ErrorBlock({
       )}
     </div>
   )
+}
+
+/** `details.required_scope`, present on FORBIDDEN and nowhere else. */
+function requiredScope(error: KeelApiError): string | null {
+  const details = error.details
+  if (typeof details !== 'object' || details === null) return null
+  const scope = (details as { required_scope?: unknown }).required_scope
+  return typeof scope === 'string' ? scope : null
 }

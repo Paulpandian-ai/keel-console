@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import ErrorBlock from '../components/ErrorBlock'
+import ScopeNote from '../components/ScopeNote'
 import Field from '../components/Field'
 import { keel } from '../lib/keelClient'
 import {
@@ -12,6 +13,7 @@ import {
 } from '../lib/keelFields'
 import { useKeelQuery } from '../lib/useKeelQuery'
 import { useSession } from '../lib/useSession'
+import { useWhoami } from '../lib/useWhoami'
 
 /**
  * The evidence page: a receipt id verifies against Keel's signing key, a
@@ -31,6 +33,7 @@ const MODES = ['', 'query', 'simulate', 'commit'] as const
 
 export default function Receipts() {
   const { baseUrl, hasToken } = useSession()
+  const { can, ready } = useWhoami()
   const [params, setParams] = useSearchParams()
   const receiptId = params.get(RECEIPT_PARAM) ?? ''
   const requestId = params.get(REQUEST_PARAM) ?? ''
@@ -60,18 +63,18 @@ export default function Receipts() {
 
   const verification = useKeelQuery<unknown>(
     (signal) =>
-      hasToken && receiptId
+      hasToken && ready && receiptId && can('verify_receipt') !== false
         ? keel.query<unknown>('verify_receipt', { receipt_id: receiptId }, { signal })
         : Promise.resolve(null),
-    [baseUrl, hasToken, receiptId],
+    [baseUrl, hasToken, receiptId, can, ready],
   )
 
   const explanation = useKeelQuery<unknown>(
     (signal) =>
-      hasToken && requestId
+      hasToken && ready && requestId && can('explain_error') !== false
         ? keel.query<unknown>('explain_error', { request_id: requestId }, { signal })
         : Promise.resolve(null),
-    [baseUrl, hasToken, requestId],
+    [baseUrl, hasToken, requestId, can, ready],
   )
 
   const verified = verification.data ? readReceiptVerification(verification.data) : null
@@ -110,10 +113,17 @@ export default function Receipts() {
             aria-label="receipt id"
             onChange={(event) => setReceiptDraft(event.target.value)}
           />
-          <button type="submit" className="btn" disabled={!hasToken}>
+          <button
+            type="submit"
+            className="btn"
+            disabled={!hasToken || can('verify_receipt') === false}
+          >
             Verify
           </button>
         </form>
+        {hasToken && can('verify_receipt') === false && (
+          <ScopeNote tool="verify_receipt" what="receipts cannot be verified" />
+        )}
 
         {verification.loading && receiptId && <p className="muted">Verifying…</p>}
         {verification.error && (
@@ -182,10 +192,17 @@ export default function Receipts() {
             aria-label="request id"
             onChange={(event) => setRequestDraft(event.target.value)}
           />
-          <button type="submit" className="btn" disabled={!hasToken}>
+          <button
+            type="submit"
+            className="btn"
+            disabled={!hasToken || can('explain_error') === false}
+          >
             Explain
           </button>
         </form>
+        {hasToken && can('explain_error') === false && (
+          <ScopeNote tool="explain_error" what="requests cannot be explained" />
+        )}
 
         {explanation.loading && requestId && <p className="muted">Asking Keel…</p>}
         {explanation.error && <ErrorBlock error={explanation.error} onRetry={explanation.reload} />}
@@ -297,6 +314,7 @@ function RequestLog({
   onVerify: (receiptId: string) => void
 }) {
   const { baseUrl, hasToken } = useSession()
+  const { can, ready } = useWhoami()
   const [mode, setMode] = useState<(typeof MODES)[number]>('')
   const [tool, setTool] = useState('')
   const [errorCode, setErrorCode] = useState('')
@@ -305,7 +323,7 @@ function RequestLog({
 
   const log = useKeelQuery<unknown>(
     (signal) =>
-      hasToken
+      hasToken && ready && can('get_request_log') !== false
         ? keel.query<unknown>(
             'get_request_log',
             {
@@ -318,7 +336,7 @@ function RequestLog({
             { signal },
           )
         : Promise.resolve(null),
-    [baseUrl, hasToken, mode, applied.tool, applied.errorCode, offset],
+    [baseUrl, hasToken, mode, applied.tool, applied.errorCode, offset, can, ready],
   )
 
   const page = log.data ? readRequestLogPage(log.data) : null
@@ -378,6 +396,9 @@ function RequestLog({
         </button>
       </form>
 
+      {hasToken && can('get_request_log') === false && (
+        <ScopeNote tool="get_request_log" what="the log cannot be read" />
+      )}
       {log.loading && <p className="muted">Loading…</p>}
       {log.error && <ErrorBlock error={log.error} onRetry={log.reload} />}
 

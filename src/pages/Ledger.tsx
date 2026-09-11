@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react'
 import { Link } from 'react-router-dom'
 import ErrorBlock from '../components/ErrorBlock'
+import ScopeNote from '../components/ScopeNote'
 import Field from '../components/Field'
 import PeriodPicker from '../components/PeriodPicker'
 import { keel } from '../lib/keelClient'
@@ -13,25 +14,27 @@ import {
 } from '../lib/keelFields'
 import { useKeelQuery } from '../lib/useKeelQuery'
 import { useSession } from '../lib/useSession'
+import { useWhoami } from '../lib/useWhoami'
 
 /** `get_ledger_entries` pages by `limit` alone; "show more" asks for a bigger page. */
 const ENTRY_PAGE = 25
 
 export default function Ledger() {
   const { baseUrl, hasToken } = useSession()
+  const { can, ready } = useWhoami()
   const [period, setPeriod] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
 
   const trialBalance = useKeelQuery<Json | null>(
     (signal) =>
-      hasToken
+      hasToken && ready && can('get_trial_balance') !== false
         ? keel.query<Json>(
             'get_trial_balance',
             period ? { period_code: period } : {},
             { signal },
           )
         : Promise.resolve(null),
-    [baseUrl, hasToken, period],
+    [baseUrl, hasToken, period, can, ready],
   )
 
   const balance = trialBalance.data ? readTrialBalance(trialBalance.data) : null
@@ -59,6 +62,9 @@ export default function Ledger() {
             No token in this session. <Link to="/settings">Add one in Settings</Link> to read the
             ledger — it needs the <code className="scope">finance:read</code> scope.
           </p>
+        )}
+        {hasToken && can('get_trial_balance') === false && (
+          <ScopeNote tool="get_trial_balance" what="the ledger cannot be read" />
         )}
         {trialBalance.loading && <p className="muted">Loading…</p>}
         {trialBalance.error && (

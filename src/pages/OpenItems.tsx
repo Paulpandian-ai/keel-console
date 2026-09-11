@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import ErrorBlock from '../components/ErrorBlock'
+import ScopeNote from '../components/ScopeNote'
 import Field from '../components/Field'
 import { keel } from '../lib/keelClient'
 import { formatCents, openItemTarget, readOpenItems, type Json } from '../lib/keelFields'
 import { useKeelQuery } from '../lib/useKeelQuery'
 import { useSession } from '../lib/useSession'
+import { useWhoami } from '../lib/useWhoami'
 
 /** The two sub-ledgers `list_open_items` serves. */
 const TABS = [
@@ -15,6 +17,7 @@ const TABS = [
 
 export default function OpenItems() {
   const { baseUrl, hasToken } = useSession()
+  const { can, ready } = useWhoami()
   const [kind, setKind] = useState<'ap' | 'ar'>('ap')
   const [overdueOnly, setOverdueOnly] = useState(false)
   const [party, setParty] = useState('')
@@ -22,7 +25,7 @@ export default function OpenItems() {
 
   const openItems = useKeelQuery<Json | null>(
     (signal) =>
-      hasToken
+      hasToken && ready && can('list_open_items') !== false
         ? keel.query<Json>(
             'list_open_items',
             {
@@ -33,7 +36,7 @@ export default function OpenItems() {
             { signal },
           )
         : Promise.resolve(null),
-    [baseUrl, hasToken, kind, overdueOnly, appliedParty],
+    [baseUrl, hasToken, kind, overdueOnly, appliedParty, can, ready],
   )
 
   const items = openItems.data ? readOpenItems(openItems.data) : null
@@ -100,6 +103,9 @@ export default function OpenItems() {
             No token in this session. <Link to="/settings">Add one in Settings</Link> to read open
             items — it needs the <code className="scope">finance:read</code> scope.
           </p>
+        )}
+        {hasToken && can('list_open_items') === false && (
+          <ScopeNote tool="list_open_items" what="open items cannot be read" />
         )}
         {openItems.loading && <p className="muted">Loading…</p>}
         {openItems.error && <ErrorBlock error={openItems.error} onRetry={openItems.reload} />}
