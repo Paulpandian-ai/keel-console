@@ -64,8 +64,8 @@ Every shape the console reads is recorded from
 - **Trace.** `trace_document(id_or_number)` → `{requested, root, nodes, edges,
   journal_entry_count, reversal_journal_entries}`. A node is `{id, number, type, status,
   total_cents, created_at, state_version, event_seqs, receipts:[{id, tool, actor, on_behalf_of,
-  signed_at}]}`. `edges` is the one unverified shape — every trace in the seeded dataset returns
-  `edges: []` — so it is read loosely and marked as such in `keelFields.ts`.
+  signed_at}]}`. An edge is `{from, to, relation}` (e.g. `relation: "approval"` from a PO to its
+  ApprovalRequest), pinned 2026-09-11 once the demo data produced one.
 - **Paging.** `limit` + `offset` (`search_documents`, `get_request_log`) or `after_seq` + `limit`
   (`poll_events`). There is no cursor anywhere in the catalog.
 - **Money.** Minor units in `*_cents`. `formatCents` regroups the digits for display; nothing is

@@ -219,7 +219,7 @@ export default function Trace() {
                     <code className="mono">{edge.from ?? '—'}</code>
                     <span className="muted">→</span>
                     <code className="mono">{edge.to ?? '—'}</code>
-                    {edge.label && <span className="badge">{edge.label}</span>}
+                    {edge.relation && <span className="badge">{edge.relation}</span>}
                   </li>
                 ))}
               </ul>

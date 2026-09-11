@@ -233,23 +233,22 @@ export function readTraceNode(raw: unknown): TraceNode {
 }
 
 /**
- * An edge between two nodes. **Unverified**: every trace in the seeded dataset
- * comes back with `edges: []`, so the key names inside an edge are the only
- * thing on this page that has not been seen live. Read loosely and shown as
- * "from → to" with whatever label is present.
+ * An edge between two nodes: `{from, to, relation}`, pinned live 2026-09-11
+ * against PO-000001 once its ApprovalRequest gave the trace an edge
+ * (`relation: "approval"`). Shown as "from → to" with the relation.
  */
 export interface TraceEdge {
   from: string | null
   to: string | null
-  label: string | null
+  relation: string | null
 }
 
 export function readTraceEdge(raw: unknown): TraceEdge {
   const source = asObject(raw)
   return {
-    from: scalar(pick(source, 'from', 'from_id', 'source', 'parent')),
-    to: scalar(pick(source, 'to', 'to_id', 'target', 'child')),
-    label: scalar(pick(source, 'kind', 'type', 'relation', 'label')),
+    from: scalar(source.from),
+    to: scalar(source.to),
+    relation: scalar(source.relation),
   }
 }
 
