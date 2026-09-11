@@ -1025,3 +1025,171 @@ export function readCommitOutcome(envelope: unknown): CommitOutcome {
     policy: readPolicy(source.policy),
   }
 }
+
+/* ---------------------------------------------------------------- receipts */
+
+/**
+ * The signed receipt itself, as `verify_receipt` returns it under `receipt`
+ * and as a commit envelope returns it directly (pinned live 2026-09-11):
+ *
+ *   {id, tool_name, actor_id, actor_kind, on_behalf_of, document_type,
+ *    document_id, document_number, action_hash, before_hash, after_hash,
+ *    public_key_id, signature, signed_at}
+ */
+export interface SignedReceipt {
+  id: string | null
+  toolName: string | null
+  actorId: string | null
+  actorKind: string | null
+  onBehalfOf: string | null
+  documentType: string | null
+  documentId: string | null
+  documentNumber: string | null
+  actionHash: string | null
+  beforeHash: string | null
+  afterHash: string | null
+  publicKeyId: string | null
+  signature: string | null
+  signedAt: string | null
+}
+
+export function readSignedReceipt(raw: unknown): SignedReceipt {
+  const source = asObject(raw)
+  return {
+    id: scalar(source.id),
+    toolName: scalar(source.tool_name),
+    actorId: scalar(source.actor_id),
+    actorKind: scalar(source.actor_kind),
+    onBehalfOf: scalar(source.on_behalf_of),
+    documentType: scalar(source.document_type),
+    documentId: scalar(source.document_id),
+    documentNumber: scalar(source.document_number),
+    actionHash: scalar(source.action_hash),
+    beforeHash: scalar(source.before_hash),
+    afterHash: scalar(source.after_hash),
+    publicKeyId: scalar(source.public_key_id),
+    signature: scalar(source.signature),
+    signedAt: scalar(source.signed_at),
+  }
+}
+
+/**
+ * `verify_receipt(receipt_id)` → `{receipt_id, valid, signature_valid,
+ * action_hash_valid, key_retired, public_key_id, receipt}`.
+ *
+ * An unknown id is **not an error**: Keel answers `ok: true` with
+ * `{receipt_id, valid: false, reason: "receipt not found"}` and nothing else.
+ * `valid` is Keel's verdict — the console never checks a signature itself.
+ */
+export interface ReceiptVerification {
+  receiptId: string | null
+  valid: boolean | null
+  signatureValid: boolean | null
+  actionHashValid: boolean | null
+  keyRetired: boolean | null
+  publicKeyId: string | null
+  /** Set when `valid` is false and there is no receipt to show. */
+  reason: string | null
+  receipt: SignedReceipt | null
+}
+
+export function readReceiptVerification(payload: unknown): ReceiptVerification {
+  const source = asObject(payload)
+  const flag = (value: unknown) => (typeof value === 'boolean' ? value : null)
+  return {
+    receiptId: scalar(source.receipt_id),
+    valid: flag(source.valid),
+    signatureValid: flag(source.signature_valid),
+    actionHashValid: flag(source.action_hash_valid),
+    keyRetired: flag(source.key_retired),
+    publicKeyId: scalar(source.public_key_id),
+    reason: scalar(source.reason),
+    receipt: source.receipt ? readSignedReceipt(source.receipt) : null,
+  }
+}
+
+/**
+ * One row of `get_request_log` → `requests`, and — with `explanation` added —
+ * the whole result of `explain_error(request_id)`. Same object both ways,
+ * pinned live 2026-09-11:
+ *
+ *   {request_id, tool, mode, actor_id, actor_kind, on_behalf_of, outcome,
+ *    error_code, error_message, policy_decision, policy, receipt_id,
+ *    simulation_id, idempotency_key, document_id, document_number, latency_ms,
+ *    started_at, payload, state_snapshot}
+ *
+ * `outcome` is `ok` / `simulated` / `applied` / `replayed` / `error`.
+ * `explain_error` on a request that succeeded still answers, with an
+ * `explanation` saying there is nothing to explain.
+ */
+export interface RequestLogEntry {
+  requestId: string | null
+  tool: string | null
+  mode: string | null
+  actorId: string | null
+  actorKind: string | null
+  onBehalfOf: string | null
+  outcome: string | null
+  errorCode: string | null
+  errorMessage: string | null
+  policyDecision: string | null
+  policy: PolicyDecision | null
+  receiptId: string | null
+  simulationId: string | null
+  idempotencyKey: string | null
+  documentId: string | null
+  documentNumber: string | null
+  latencyMs: number | null
+  startedAt: string | null
+  /** The request body as Keel logged it, already redacted by Keel. */
+  payload: Json
+  stateSnapshot: Json
+  /** Keel's prose, on `explain_error` only. */
+  explanation: string | null
+}
+
+export function readRequestLogEntry(raw: unknown): RequestLogEntry {
+  const source = asObject(raw)
+  return {
+    requestId: scalar(source.request_id),
+    tool: scalar(source.tool),
+    mode: scalar(source.mode),
+    actorId: scalar(source.actor_id),
+    actorKind: scalar(source.actor_kind),
+    onBehalfOf: scalar(source.on_behalf_of),
+    outcome: scalar(source.outcome),
+    errorCode: scalar(source.error_code),
+    errorMessage: scalar(source.error_message),
+    policyDecision: scalar(source.policy_decision),
+    policy: source.policy ? readPolicy(source.policy) : null,
+    receiptId: scalar(source.receipt_id),
+    simulationId: scalar(source.simulation_id),
+    idempotencyKey: scalar(source.idempotency_key),
+    documentId: scalar(source.document_id),
+    documentNumber: scalar(source.document_number),
+    latencyMs: asNumber(source.latency_ms),
+    startedAt: scalar(source.started_at),
+    payload: asObject(source.payload),
+    stateSnapshot: asObject(source.state_snapshot),
+    explanation: scalar(source.explanation),
+  }
+}
+
+/**
+ * `get_request_log(since?, actor?, tool?, error_code?, mode?, limit?, offset?)`
+ * → `{count, offset, requests}`, newest first. Paged by `limit` + `offset`.
+ */
+export interface RequestLogPage {
+  count: number | null
+  offset: number | null
+  requests: RequestLogEntry[]
+}
+
+export function readRequestLogPage(payload: unknown): RequestLogPage {
+  const source = asObject(payload)
+  return {
+    count: asNumber(source.count),
+    offset: asNumber(source.offset),
+    requests: asArray(source.requests).map(readRequestLogEntry),
+  }
+}

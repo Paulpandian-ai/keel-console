@@ -4,13 +4,14 @@ import Events from './pages/Events'
 import Inventory from './pages/Inventory'
 import Ledger from './pages/Ledger'
 import OpenItems from './pages/OpenItems'
+import Receipts from './pages/Receipts'
 import Recon from './pages/Recon'
 import Settings from './pages/Settings'
 import Status from './pages/Status'
 import Trace from './pages/Trace'
 import { useSession } from './lib/useSession'
 
-/** Routes shipped so far. Step 5 adds /receipts. */
+/** Every route the console has. */
 const ROUTES = [
   { to: '/', label: 'Status', end: true },
   { to: '/events', label: 'Events', end: false },
@@ -20,6 +21,7 @@ const ROUTES = [
   { to: '/approvals', label: 'Approvals', end: false },
   { to: '/recon', label: 'Close', end: false },
   { to: '/trace', label: 'Trace', end: false },
+  { to: '/receipts', label: 'Receipts', end: false },
   { to: '/settings', label: 'Settings', end: false },
 ]
 
@@ -55,6 +57,7 @@ export default function App() {
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/recon" element={<Recon />} />
           <Route path="/trace" element={<Trace />} />
+          <Route path="/receipts" element={<Receipts />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -253,7 +253,16 @@ function TraceNodeView({ node, isRoot }: { node: TraceNode; isRoot: boolean }) {
                 <span className="muted">{receipt.actor ?? '—'}</span>
                 {receipt.onBehalfOf && <span className="muted">for {receipt.onBehalfOf}</span>}
                 <span className="muted">{formatTimestamp(receipt.signedAt) ?? ''}</span>
-                <code className="mono muted receipt-id">{receipt.id ?? '—'}</code>
+                {receipt.id ? (
+                  <Link
+                    className="mono muted receipt-id"
+                    to={`/receipts?receipt=${encodeURIComponent(receipt.id)}`}
+                  >
+                    {receipt.id}
+                  </Link>
+                ) : (
+                  <code className="mono muted receipt-id">—</code>
+                )}
               </div>
             ))}
             {node.eventSeqs.length > 0 && (

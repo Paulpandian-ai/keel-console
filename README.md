@@ -18,7 +18,7 @@ Set the facade origin at build time with `VITE_KEEL_URL` (see `.env.example`); u
 override it at runtime in Settings. Paste a Keel bearer token in Settings — it lives in
 `sessionStorage` only and is sent as an `Authorization` header, never in a URL or a log.
 
-## Built so far — steps 1–4
+## Built — all five steps
 
 | Piece | Notes |
 |---|---|
@@ -41,7 +41,7 @@ override it at runtime in Settings. Paste a Keel bearer token in Settings — it
 | `src/components/Effects.tsx` | What a write would do, or has just done — Keel returns the same object for `simulate.projected_effects` and `commit.effects`. |
 | `src/pages/approvals.test.tsx` | The write path against recorded envelopes: no commit without a confirmed simulation, the key derived from that simulation, and the per-line goods counts. |
 
-Step 5 (receipts / `explain_error`) is not built yet.
+| `/receipts` | `verify_receipt` for a receipt id, `explain_error` for a request id, and the paged `get_request_log` with mode / tool / error-code filters. Every `request_id` shown on an error, and every receipt id on Trace, Events and Approvals, links here. |
 
 ## Verified against the live facade
 
@@ -96,6 +96,17 @@ Every shape the console reads is recorded from
   `{status, document, effects, events_emitted, journal_entry, receipt, policy, warnings}`, where
   `status` is `applied` or — when Keel recognises the idempotency key — `replayed`, returning the
   original receipt and emitting nothing new.
+- **Receipts.** `verify_receipt` → `{receipt_id, valid, signature_valid, action_hash_valid,
+  key_retired, public_key_id, receipt}`, the receipt being `{id, tool_name, actor_id, actor_kind,
+  on_behalf_of, document_type, document_id, document_number, action_hash, before_hash,
+  after_hash, public_key_id, signature, signed_at}`. An unknown id is not an error: Keel answers
+  `ok: true` with `{receipt_id, valid: false, reason: "receipt not found"}`.
+- **Request log.** `get_request_log` → `{count, offset, requests}`, each `{request_id, tool,
+  mode, actor_id, actor_kind, on_behalf_of, outcome, error_code, error_message, policy_decision,
+  policy, receipt_id, simulation_id, idempotency_key, document_id, document_number, latency_ms,
+  started_at, payload, state_snapshot}`. `explain_error(request_id)` returns the same row plus
+  `explanation`, Keel's own sentence — and answers for successful requests too ("nothing to
+  explain").
 - **Goods acceptance.** `details.counted` gives `{sku, po_line_id, expected_qty, qty, damaged_qty,
   short_qty, over_qty, unit_cost_cents, account, note}`. The console sends `accepted_lines` with
   the counts a human typed; `short_qty`, `over_qty`, the journal entry and the value all come back
@@ -126,7 +137,15 @@ simulation decides whether a commit is offered, and a refusal is shown verbatim.
 Useful for the next step: `list_capabilities` returns all 67 tools with signature and scope, and
 `describe_tool(name)` returns one tool's JSON Schema.
 
-## Deploy notes
+## Deploy
 
-Routing is history-based, so the static host needs an SPA fallback (rewrite unknown paths to
-`/index.html`). Wire this up in step 5 along with the deploy target.
+`.github/workflows/deploy.yml` typechecks, tests, builds and publishes `dist/` to GitHub Pages on
+every push to `main`. Two things make a history-routed SPA work under a project-pages sub-path:
+
+- `VITE_BASE_PATH=/keel-console/` becomes Vite's `base` and the router's `basename`
+  (`src/main.tsx`). Leave it unset for `/` on a custom domain or a Railway static service.
+- `npm run build` copies `dist/index.html` to `dist/404.html`, which GitHub Pages serves for any
+  unknown path, so a deep link like `/keel-console/trace?doc=PO-000001` still loads the app.
+
+Nothing secret enters the build. The Keel token is pasted at runtime and lives in
+`sessionStorage`; the only build-time inputs are the facade URL and the base path.

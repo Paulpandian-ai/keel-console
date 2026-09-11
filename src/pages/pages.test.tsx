@@ -15,6 +15,7 @@ import Events from './Events'
 import Inventory from './Inventory'
 import Ledger from './Ledger'
 import OpenItems from './OpenItems'
+import Receipts from './Receipts'
 import Recon from './Recon'
 import Status from './Status'
 import Trace from './Trace'
@@ -244,8 +245,96 @@ const OPEN_ITEMS: Record<string, unknown> = {
   },
 }
 
+/** Recorded live 2026-09-11 from the commit that pinned the write envelope. */
+const REQUEST_LOG_ENTRY = {
+  actor_id: 'human:paul-console',
+  actor_kind: 'human',
+  document_id: '01M281VAZ2CFDF9DMKP6AMW6ZH',
+  document_number: null,
+  error_code: null,
+  error_message: null,
+  idempotency_key: 'console:01M281VKKQS0JRV0T4WNBK7CZ3:reject_approval',
+  latency_ms: 26.78,
+  mode: 'commit',
+  on_behalf_of: null,
+  outcome: 'applied',
+  payload: { reason: 'shape probe complete', request_id: '01M281VAZ2CFDF9DMKP6AMW6ZH' },
+  policy: {
+    decision: 'allow',
+    error_code: null,
+    policy_version: 1,
+    reasons: [],
+    rules_evaluated: ['human_approval_only'],
+    rules_triggered: [],
+    warnings: [],
+  },
+  policy_decision: 'allow',
+  receipt_id: '01M281VR4H5KJCXT7BV5G1DXP6',
+  request_id: '01M281VR41DHNH4MB2B79B4QAA',
+  simulation_id: '01M281VKKWNZ6ZKSZRJYF16M34',
+  started_at: '2026-09-11T10:57:52Z',
+  state_snapshot: {},
+  tool: 'reject_approval',
+}
+
+/** `explain_error` on a request that failed: the log row plus Keel's sentence. */
+const EXPLAINED_FORBIDDEN = {
+  ...REQUEST_LOG_ENTRY,
+  document_id: null,
+  error_code: 'FORBIDDEN',
+  error_message: "token lacks scope 'admin:tokens' required by list_tokens",
+  explanation:
+    "list_tokens in mode query by human:paul-console failed with FORBIDDEN: token lacks scope 'admin:tokens' required by list_tokens",
+  idempotency_key: null,
+  mode: 'query',
+  outcome: 'error',
+  payload: {},
+  policy: null,
+  policy_decision: null,
+  receipt_id: null,
+  request_id: '01M281RS7TJ1QH842S68N1964C',
+  simulation_id: null,
+  tool: 'list_tokens',
+}
+
+/** `verify_receipt`, keyed by receipt id. An unknown id is not an error. */
+const RECEIPTS: Record<string, unknown> = {
+  '01M281VR4H5KJCXT7BV5G1DXP6': {
+    action_hash_valid: true,
+    key_retired: false,
+    public_key_id: '01M1Y420ZTB6BCVYVN1A5S6YG8',
+    receipt: {
+      action_hash: 'sha256:4b484f2b98aa19e39ac3f5c1685570bbb9bf97ee24c595bc829bbf66b733f9d2',
+      actor_id: 'human:paul-console',
+      actor_kind: 'human',
+      after_hash: 'sha256:d208cf2ebeca969513c36646d71df496c0222df0abb72e38e29aec3736a86dc6',
+      before_hash: 'sha256:c27c93386d36a358b40b772d3527535aefb333b9f96f1ce734b89636fc313310',
+      document_id: '01M281VAZ2CFDF9DMKP6AMW6ZH',
+      document_number: null,
+      document_type: 'ApprovalRequest',
+      id: '01M281VR4H5KJCXT7BV5G1DXP6',
+      on_behalf_of: null,
+      public_key_id: '01M1Y420ZTB6BCVYVN1A5S6YG8',
+      signature: 'OGriyS//RSieVHSsxWMI7vcKdUvfYyPr6f/hAbLdRT4gQmd/XYs9/oa8XYwKqxOa2nJOSPQfEX7ngFWunlHXAw==',
+      signed_at: '2026-09-11T10:57:52Z',
+      tool_name: 'reject_approval',
+    },
+    receipt_id: '01M281VR4H5KJCXT7BV5G1DXP6',
+    signature_valid: true,
+    valid: true,
+  },
+  '01M00000000000000000000000': {
+    reason: 'receipt not found',
+    receipt_id: '01M00000000000000000000000',
+    valid: false,
+  },
+}
+
 const query = vi.fn(async (tool: string, payload: ToolPayload = {}) => {
   if (tool === 'get_reconciliation') return RECON[String(payload.kind)]
+  if (tool === 'verify_receipt') return RECEIPTS[String(payload.receipt_id)]
+  if (tool === 'explain_error') return EXPLAINED_FORBIDDEN
+  if (tool === 'get_request_log') return { count: 1, offset: payload.offset ?? 0, requests: [REQUEST_LOG_ENTRY] }
   if (tool === 'list_open_items') return OPEN_ITEMS[String(payload.kind)]
   if (tool === 'search_documents') {
     const items = payload.status ? PERIOD_HITS.filter((p) => p.status === payload.status) : PERIOD_HITS
@@ -513,5 +602,82 @@ describe('Close readiness', () => {
     const labels = screen.queryAllByRole('button').map((button) => button.textContent ?? '')
     expect(labels.some((label) => /close/i.test(label))).toBe(false)
     expect(query.mock.calls.map(([tool]) => tool)).not.toContain('close_period')
+  })
+})
+
+describe('Receipts', () => {
+  it('lists the request log with Keel\'s outcome and latency', async () => {
+    show(<Receipts />, '/receipts')
+
+    expect(await screen.findByText('reject_approval')).toBeTruthy()
+    expect(await screen.findByText('applied')).toBeTruthy()
+    expect(await screen.findByText('26.78')).toBeTruthy()
+    expect(query).toHaveBeenCalledWith(
+      'get_request_log',
+      { limit: 25, offset: 0 },
+      expect.anything(),
+    )
+  })
+
+  it('verifies the receipt named in the URL and shows Keel\'s verdict', async () => {
+    show(<Receipts />, '/receipts?receipt=01M281VR4H5KJCXT7BV5G1DXP6')
+
+    expect(await screen.findByText('valid')).toBeTruthy()
+    // Signature and action hash each earn their own badge from Keel's flags.
+    expect((await screen.findAllByText('ok')).length).toBe(2)
+    expect(await screen.findByText('01M1Y420ZTB6BCVYVN1A5S6YG8')).toBeTruthy()
+    // The actor is on the receipt and again in the log row below it.
+    expect((await screen.findAllByText('human:paul-console')).length).toBe(2)
+    expect(query).toHaveBeenCalledWith(
+      'verify_receipt',
+      { receipt_id: '01M281VR4H5KJCXT7BV5G1DXP6' },
+      expect.anything(),
+    )
+  })
+
+  it('shows an unknown receipt as Keel reports it: not valid, not an error', async () => {
+    show(<Receipts />, '/receipts?receipt=01M00000000000000000000000')
+
+    expect(await screen.findByText('not valid')).toBeTruthy()
+    expect(await screen.findByText('receipt not found')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('explains a failed request in Keel\'s own words', async () => {
+    show(<Receipts />, '/receipts?request=01M281RS7TJ1QH842S68N1964C')
+
+    expect(
+      await screen.findByText(
+        "list_tokens in mode query by human:paul-console failed with FORBIDDEN: token lacks scope 'admin:tokens' required by list_tokens",
+      ),
+    ).toBeTruthy()
+    const card = (await screen.findByText('Explain a request')).closest('section') as HTMLElement
+    expect(within(card).getByText('FORBIDDEN')).toBeTruthy()
+    // Keel's `outcome`, as a badge — distinct from the "error" field label.
+    expect(within(card).getByText('error', { selector: '.badge' })).toBeTruthy()
+    expect(query).toHaveBeenCalledWith(
+      'explain_error',
+      { request_id: '01M281RS7TJ1QH842S68N1964C' },
+      expect.anything(),
+    )
+  })
+
+  it('pages the log by offset, the way Keel pages it', async () => {
+    const user = userEvent.setup()
+    show(<Receipts />, '/receipts')
+    await screen.findByText('reject_approval')
+
+    // One row on a 25-row page: this is the last page, so nothing older.
+    expect((screen.getByText('older') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByText('newer') as HTMLButtonElement).disabled).toBe(true)
+
+    await user.selectOptions(screen.getByLabelText('Mode'), 'commit')
+    await waitFor(() =>
+      expect(query).toHaveBeenCalledWith(
+        'get_request_log',
+        { limit: 25, offset: 0, mode: 'commit' },
+        expect.anything(),
+      ),
+    )
   })
 })

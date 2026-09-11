@@ -1,9 +1,10 @@
+import { Link } from 'react-router-dom'
 import type { KeelApiError } from '../lib/keelClient'
 
 /**
  * Errors are shown exactly as Keel sent them: `code`, `message`, Keel's own
- * `retry_advice`, and the `request_id` so it can be pasted into `explain_error`.
- * Nothing here is reworded or interpreted.
+ * `retry_advice`, and the `request_id`, which links to `explain_error` on the
+ * Receipts page. Nothing here is reworded or interpreted.
  */
 export default function ErrorBlock({
   error,
@@ -27,7 +28,10 @@ export default function ErrorBlock({
       {error.retryAdvice && <p className="error-advice">{error.retryAdvice}</p>}
       {error.requestId && (
         <p className="error-request-id">
-          request_id <code>{error.requestId}</code>
+          request_id{' '}
+          <Link to={`/receipts?request=${encodeURIComponent(error.requestId)}`}>
+            <code>{error.requestId}</code>
+          </Link>
         </p>
       )}
       {error.details !== undefined && (

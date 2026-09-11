@@ -30,7 +30,7 @@ Keel is a headless, agent-native ERP. This repo is a **head**: a thin, replaceab
 | `/inventory` | `get_inventory(sku?)`, `get_reconciliation(inventory)` | account 1300 vs sub-ledger first, then on-hand × standard cost per SKU with Keel's own `value_cents` and `total_value_cents`; SKU links to its trace |
 | `/approvals` | `list_pending_approvals`, `approve_purchase_order`, `reject_approval`, `accept_goods`, `reject_goods` | the human inbox, and the only page that writes. Each request carries its own `projected_effects` — what the agent's blocked call would have done. Goods acceptance shows expected quantities from `details.counted` and editable accepted/damaged counts per line; `short_qty`/`over_qty` and the value come back from Keel, never computed here. Confirm is offered only when the simulation says `would_commit` |
 | `/trace` | `trace_document`, `search_documents`, `get_document` | search box for a document number or ULID; render `nodes` as a vertical timeline with each node's signed receipts inline and its `event_seqs` linking back to the feed; browse by document type |
-| `/receipts` | `verify_receipt`, `get_request_log`, `explain_error` | paste a receipt id or request id |
+| `/receipts` | `verify_receipt`, `get_request_log`, `explain_error` | paste a receipt id (`?receipt=`) or request id (`?request=`); every `request_id` in an `ErrorBlock` and every receipt id on Trace, Events and Approvals links here. `verify_receipt` on an unknown id is **not an error** — Keel answers `ok: true, valid: false, reason`. The log pages by `limit` + `offset` with `mode` / `tool` / `error_code` filters |
 | `/recon` | `get_reconciliation` for gr_ir, ap, ar, inventory; `get_period` | close-readiness checklist as read-only, blockers and warnings verbatim; no close button (Controller agent's job) — a test asserts the page renders no such control |
 | `/settings` | — | base URL, token entry (masked), clear session |
 
@@ -41,7 +41,7 @@ Keel is a headless, agent-native ERP. This repo is a **head**: a thin, replaceab
 - Money arrives from Keel in minor units (`*_cents`); regroup the digits for display only, never do arithmetic.
 - Every list is paged the way Keel pages — `limit` + `offset` (`search_documents`, `get_request_log`) or `after_seq` + `limit` (`poll_events`); there is no cursor in the catalog. No client-side "load everything."
 - Tests: a mocked `keelClient` with recorded Keel responses; component tests for approvals (simulate → confirm → commit) and goods acceptance (per-line counts).
-- Deploy as a static site (Railway static service or GitHub Pages). No server component in this repo.
+- Deploy as a static site. `.github/workflows/deploy.yml` builds and publishes to GitHub Pages on every push to `main`, with `VITE_BASE_PATH=/keel-console/` (Vite's `base`, handed to the router as `basename`) and `404.html` as a copy of `index.html` for the SPA fallback. No server component in this repo.
 
 ## Build order
 
@@ -49,7 +49,7 @@ Keel is a headless, agent-native ERP. This repo is a **head**: a thin, replaceab
 2. Events + Trace. These are the demo pages. ✅ shapes pinned against live responses
 3. Ledger, Open Items, Inventory, Recon. ✅
 4. Approvals (the only write pages), with simulate-then-commit and idempotency keys. ✅ shapes pinned against live simulates and one real commit
-5. Receipts/explain_error, polish, deploy.
+5. Receipts/explain_error, polish, deploy. ✅
 
 Stop and ask if any page seems to need logic that Keel does not expose; the answer is a new Keel query tool, not console code.
 

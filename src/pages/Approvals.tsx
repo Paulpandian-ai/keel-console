@@ -501,8 +501,16 @@ function DecisionPanel({
         )}
         <dl className="fields">
           <Field label="request id" value={outcome.requestId} />
-          {/* TODO: link to /receipts once step 5 adds verify_receipt. */}
-          <Field label="receipt" value={outcome.receiptId} />
+          <Field
+            label="receipt"
+            value={
+              outcome.receiptId && (
+                <Link to={`/receipts?receipt=${encodeURIComponent(outcome.receiptId)}`}>
+                  {outcome.receiptId}
+                </Link>
+              )
+            }
+          />
           <Field
             label="events"
             value={outcome.eventsEmitted

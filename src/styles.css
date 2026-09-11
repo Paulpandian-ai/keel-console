@@ -504,3 +504,17 @@ table.feed tfoot th.col-money { text-align: right; font-family: var(--mono); }
   border-color: var(--accent);
   color: #fff;
 }
+
+/* -------------------------------------------------------------- receipts */
+
+.explanation {
+  margin: 0 0 0.8rem;
+  padding: 0.6rem 0.8rem;
+  border-left: 3px solid var(--accent);
+  background: var(--panel-2);
+  border-radius: 0 8px 8px 0;
+}
+
+.receipt-id:hover {
+  color: var(--accent);
+}

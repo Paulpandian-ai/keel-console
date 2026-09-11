@@ -183,7 +183,16 @@ export default function Events() {
                             <span className="muted">actor</span>
                             <code className="mono">{event.actorId ?? '—'}</code>
                             <span className="muted">receipt</span>
-                            <code className="mono">{event.receiptId ?? '—'}</code>
+                            {event.receiptId ? (
+                              <Link
+                                className="mono"
+                                to={`/receipts?receipt=${encodeURIComponent(event.receiptId)}`}
+                              >
+                                {event.receiptId}
+                              </Link>
+                            ) : (
+                              <code className="mono">—</code>
+                            )}
                             {event.status && (
                               <>
                                 <span className="muted">status</span>
