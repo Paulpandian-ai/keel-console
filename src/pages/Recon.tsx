@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import AutoTable from '../components/AutoTable'
+import RawRows from '../components/RawRows'
 import ErrorBlock from '../components/ErrorBlock'
 import Field from '../components/Field'
 import PeriodPicker from '../components/PeriodPicker'
@@ -240,7 +240,7 @@ function ReconCard({
           <summary>
             {rows.length} {spec.rowsLabel}
           </summary>
-          <AutoTable rows={rows as Json[]} emptyLabel="none" />
+          <RawRows rows={rows as Json[]} emptyLabel="none" />
         </details>
       )}
     </div>

@@ -61,19 +61,6 @@ const RECORDED = {
       total_debit_cents: 25275000,
     },
   },
-  // POST /api/query/search_documents {"type":"zzz"} — the only place Keel names
-  // the document types.
-  unknownType: {
-    ok: false,
-    mode: 'query',
-    request_id: '01M268KPAWEED9WYVR3FQJM5N2',
-    error: {
-      code: 'VALIDATION_ERROR',
-      message: 'unknown document type zzz',
-      details: { known: ['Account', 'JournalEntry', 'PurchaseOrder'] },
-      retry_advice: 'Fix the payload and retry.',
-    },
-  },
 }
 
 function clientWith(
@@ -284,12 +271,28 @@ describe('keelClient', () => {
   })
 
   it('simulates on /api/simulate/{tool} and keeps the envelope for the commit', async () => {
+    // Recorded live 2026-09-11. Unlike a query, there is no `result` key: the
+    // verdict and the projection sit at the top level of the envelope.
     const { client, fetchMock } = clientWith(() =>
-      json({ ok: true, mode: 'simulate', request_id: 'req_sim', result: { effects: [] } }),
+      json({
+        ok: true,
+        mode: 'simulate',
+        request_id: 'req_sim',
+        simulation_id: 'sim_1',
+        tool: 'accept_goods',
+        validation: { errors: [], warnings: ['discrepancy: VALVE-2IN: 1 short'] },
+        would_commit: true,
+        commit_would_fail_with: null,
+        projected_effects: { documents: [], events: ['goods.received'] },
+        expires_at: '2026-09-11T11:04:16Z',
+      }),
     )
     const simulation = await client.simulate('accept_goods', { request_id: 'apr_1' })
 
     expect((fetchMock.mock.calls[0] as [string])[0]).toBe(`${BASE}/api/simulate/accept_goods`)
+    expect(simulation.would_commit).toBe(true)
+    expect(simulation.simulation_id).toBe('sim_1')
+    expect((simulation as unknown as Record<string, unknown>).result).toBeUndefined()
     // The commit that follows needs this request_id for its idempotency key.
     expect(simulation.request_id).toBe('req_sim')
     expect(makeIdempotencyKey(simulation.request_id!, 'accept_goods')).toBe(
@@ -297,12 +300,72 @@ describe('keelClient', () => {
     )
   })
 
-  it("learns the document types from search_documents' own refusal", async () => {
-    const { client, fetchMock } = clientWith(() => json(RECORDED.unknownType, 422))
+  it('hands back the flat commit envelope, receipt and all', async () => {
+    // Recorded live 2026-09-11 from a real commit: no `result` key here either.
+    const { client } = clientWith(() =>
+      json({
+        ok: true,
+        mode: 'commit',
+        status: 'applied',
+        request_id: '01M281VR41DHNH4MB2B79B4QAA',
+        tool: 'reject_approval',
+        document: { type: 'ApprovalRequest', status: 'rejected', action: 'update' },
+        effects: { documents: [], events: ['approval.rejected'] },
+        events_emitted: [{ seq: 90, type: 'approval.rejected' }],
+        receipt: { id: '01M281VR4H5KJCXT7BV5G1DXP6', tool_name: 'reject_approval' },
+        warnings: [],
+      }),
+    )
+
+    const outcome = await client.commit(
+      'reject_approval',
+      { request_id: 'apr_1', reason: 'no' },
+      { idempotencyKey: 'console:req_1:reject_approval' },
+    )
+
+    expect(outcome.status).toBe('applied')
+    expect((outcome.receipt as { id: string }).id).toBe('01M281VR4H5KJCXT7BV5G1DXP6')
+    expect((outcome as unknown as Record<string, unknown>).result).toBeUndefined()
+  })
+
+  it('omits simulation_id when there is none to send', async () => {
+    const { client, fetchMock } = clientWith(() => json({ ok: true, mode: 'commit' }))
+    await client.commit('reject_goods', { request_id: 'apr_1', reason: 'no' }, {
+      idempotencyKey: 'console:req_1:reject_goods',
+    })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({
+      request_id: 'apr_1',
+      reason: 'no',
+      idempotency_key: 'console:req_1:reject_goods',
+    })
+  })
+
+  it('reads the document types from list_document_types', async () => {
+    // Recorded live 2026-09-11: each entry names the type and how it is keyed,
+    // filtered and ordered. The console only needs the names.
+    const { client, fetchMock } = clientWith(() =>
+      json({
+        ok: true,
+        mode: 'query',
+        request_id: '01M281RQJY97C56ACX74XKYN1W',
+        tool: 'list_document_types',
+        result: {
+          count: 3,
+          types: [
+            { type: 'Account', identifier_field: 'code', number_prefix: null, filters: [] },
+            { type: 'JournalEntry', identifier_field: 'number', number_prefix: 'JE', filters: [] },
+            { type: 'PurchaseOrder', identifier_field: 'number', number_prefix: 'PO', filters: [] },
+          ],
+        },
+      }),
+    )
 
     const types = await loadDocumentTypes(client)
     expect(types).toEqual(['Account', 'JournalEntry', 'PurchaseOrder'])
-    // Cached: a second caller does not probe again.
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/query/list_document_types')
+    // Cached: a second caller does not ask again.
     await loadDocumentTypes(client)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })

@@ -1,16 +1,20 @@
 import { formatCents, formatTimestamp, scalar, type Json } from '../lib/keelFields'
 
 /**
- * A table for rows whose keys the console has not recorded yet.
+ * A table for rows whose keys vary by the argument Keel was called with.
  *
- * `list_open_items` has only ever answered with `items: []` on the seeded
- * dataset, so no row has been seen and there is nothing to pin. Rather than
- * invent column names, this renders whatever keys Keel sends, in the order it
- * sends them, formatting by suffix: `*_cents` as money, `*_date` / `*_at` as a
- * timestamp, everything else verbatim. When a dataset with AP/AR data exists,
- * record the shape and replace this with a real table.
+ * `get_reconciliation` answers with a different detail array per kind —
+ * `open_items` for ap/ar, `items` for inventory, `by_po` for gr_ir — and only
+ * the first two have ever come back populated (`by_po` is still empty on the
+ * seeded dataset). Those drilldowns sit behind a `<details>` and are rendered
+ * as whatever keys Keel sends, in the order it sends them, formatted by suffix:
+ * `*_cents` as money, `*_date` / `*_at` as a timestamp, everything else
+ * verbatim.
+ *
+ * This is deliberately *not* used for a shape the console has recorded. Open
+ * items had a reader written the moment a live row existed; see `readOpenItem`.
  */
-export default function AutoTable({ rows, emptyLabel }: { rows: Json[]; emptyLabel: string }) {
+export default function RawRows({ rows, emptyLabel }: { rows: Json[]; emptyLabel: string }) {
   if (rows.length === 0) return <p className="muted empty">{emptyLabel}</p>
 
   const columns: string[] = []

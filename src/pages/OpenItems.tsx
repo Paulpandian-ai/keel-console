@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import AutoTable from '../components/AutoTable'
 import ErrorBlock from '../components/ErrorBlock'
 import Field from '../components/Field'
 import { keel } from '../lib/keelClient'
-import { formatCents, readOpenItems, type Json } from '../lib/keelFields'
+import { formatCents, openItemTarget, readOpenItems, type Json } from '../lib/keelFields'
 import { useKeelQuery } from '../lib/useKeelQuery'
 import { useSession } from '../lib/useSession'
 
@@ -113,21 +112,62 @@ export default function OpenItems() {
               <Field label="open items" value={items.count} />
               <Field label="total remaining" value={formatCents(items.totalRemainingCents)} />
             </dl>
-            <div className="mt">
-              <AutoTable
-                rows={items.items}
-                emptyLabel={
-                  overdueOnly || appliedParty
-                    ? 'Keel returned no open items for this filter.'
-                    : `Keel has no open ${items.kind ?? kind} items.`
-                }
-              />
-            </div>
-            {items.items.length > 0 && (
-              <p className="muted hint">
-                Columns are whatever <code>list_open_items</code> returned; the shape of a row has
-                not been recorded yet.
+
+            {items.items.length === 0 ? (
+              <p className="muted empty">
+                {overdueOnly || appliedParty
+                  ? 'Keel returned no open items for this filter.'
+                  : `Keel has no open ${items.kind ?? kind} items.`}
               </p>
+            ) : (
+              <div className="table-scroll mt">
+                <table className="feed">
+                  <thead>
+                    <tr>
+                      <th className="col-doc">document</th>
+                      <th>party</th>
+                      <th className="col-money">amount</th>
+                      <th className="col-money">remaining</th>
+                      <th>due</th>
+                      <th>status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.items.map((item) => {
+                      const target = openItemTarget(item)
+                      return (
+                        <tr key={item.id ?? target}>
+                          <td>
+                            {target ? (
+                              <Link className="doc-number" to={`/trace?doc=${encodeURIComponent(target)}`}>
+                                {item.sourceDocNumber ?? item.sourceDocId}
+                              </Link>
+                            ) : (
+                              <span className="muted">—</span>
+                            )}
+                            <span className="doc-type">{item.sourceDocType}</span>
+                          </td>
+                          <td className="mono">{item.partyId ?? <span className="muted">—</span>}</td>
+                          <td className="col-money mono">{formatCents(item.amountCents)}</td>
+                          <td className="col-money mono">{formatCents(item.remainingCents)}</td>
+                          <td className="mono">
+                            {item.dueDate ?? <span className="muted">—</span>}
+                            {/* Keel's own count and verdict, never a date compared here. */}
+                            {item.daysToDue !== null && (
+                              <span className="muted"> · {item.daysToDue}d</span>
+                            )}
+                          </td>
+                          <td>
+                            <span className={`badge ${item.overdue ? 'badge-warn' : 'badge-ok'}`}>
+                              {item.overdue ? 'overdue' : (item.status ?? 'open')}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </>
         )}

@@ -18,7 +18,7 @@ Set the facade origin at build time with `VITE_KEEL_URL` (see `.env.example`); u
 override it at runtime in Settings. Paste a Keel bearer token in Settings — it lives in
 `sessionStorage` only and is sent as an `Authorization` header, never in a URL or a log.
 
-## Built so far — steps 1–3
+## Built so far — steps 1–4
 
 | Piece | Notes |
 |---|---|
@@ -30,14 +30,18 @@ override it at runtime in Settings. Paste a Keel bearer token in Settings — it
 | `src/lib/keelFields.ts` | The one place that reads Keel payload keys. Every key is now pinned against a live response — see below. |
 | `/events` | Live feed over `/events/stream`, falling back to polling `poll_events` every 5s. Filter by type and document; click through to trace. |
 | `/ledger` | Trial balance for a chosen period (or all), each account expanding into `explain_balance`'s grouping by source document and the entries from `get_ledger_entries`, paged by `limit`. |
-| `/open-items` | AP and AR tabs over `list_open_items`, with party filter and overdue toggle — both passed to Keel, never evaluated here. |
+| `/open-items` | AP and AR tabs over `list_open_items`, with party filter and overdue toggle — both passed to Keel, never evaluated here. Row shape pinned once demo AR data existed. |
 | `/inventory` | `get_reconciliation(inventory)` (account 1300 vs sub-ledger) above `get_inventory`'s on-hand, standard cost and value per SKU. |
 | `/recon` | Read-only close readiness: `get_period`'s checklist with blockers and warnings verbatim, plus all four reconciliations. No close button — that is the Controller agent's. |
 | `src/components/PeriodPicker.tsx` | The period a page looks at: options and the initial pick both from Keel, never from the clock. |
 | `src/pages/pages.test.tsx` | Status, Events, Trace, Ledger, Open Items, Inventory and Recon rendered against the recorded payloads with a mocked `keelClient` (jsdom + Testing Library, the harness step 4's approval tests will reuse). |
 | `/trace` | `trace_document` rendered as a vertical timeline: each node with its status, total, signed receipts (`tool`, `actor`, `signed_at`) and `event_seqs`. Browse by document type via `search_documents`. |
 
-Steps 4–5 (approvals, receipts) are not built yet. Every page above is a read; the console has performed no write yet.
+| `/approvals` | The human inbox and the only page that writes: `list_pending_approvals`, then simulate → confirm → commit for `approve_purchase_order`, `reject_approval`, `accept_goods`, `reject_goods`. |
+| `src/components/Effects.tsx` | What a write would do, or has just done — Keel returns the same object for `simulate.projected_effects` and `commit.effects`. |
+| `src/pages/approvals.test.tsx` | The write path against recorded envelopes: no commit without a confirmed simulation, the key derived from that simulation, and the per-line goods counts. |
+
+Step 5 (receipts / `explain_error`) is not built yet.
 
 ## Verified against the live facade
 
@@ -77,26 +81,49 @@ Every shape the console reads is recorded from
   `{gl_1400_net_cents, subledger_open_cents, by_po}`, `ap`/`ar` add `{control_account,
   control_account_cents, subledger_cents, open_items}`, `inventory` adds `{gl_1300_net_cents,
   subledger_value_cents, items, note}`.
-- **Open items.** The envelope `{kind, as_of, count, total_remaining_cents, items}` is recorded;
-  the **rows are not** — the seeded dataset has no unpaid invoices, so `items` has only ever come
-  back empty. `/open-items` renders whatever columns Keel sends rather than inventing names.
+- **Open items.** `{kind, as_of, count, total_remaining_cents, items}`, each item
+  `{id, kind, status, party_id, amount_cents, remaining_cents, due_date, days_to_due, overdue,
+  source_doc_id, source_doc_number, source_doc_type, created_at, updated_at, state_version}`.
+  Recorded 2026-09-11 against the AR sub-ledger; `overdue` and `days_to_due` are Keel's, decided
+  against its own `as_of`.
+- **Approvals.** `list_pending_approvals` → `{count, pending}`, each request
+  `{id, kind, status, reason, requested_by, created_at, expires_at, expired, document_type,
+  document_id, document_number, tool_name, payload, projected_effects}` — `projected_effects` is
+  what the agent's blocked call would have done, in the same shape a simulate returns.
+- **Simulate and commit.** Neither has a `result` key; both are flat. A simulate carries
+  `{simulation_id, validation:{errors, warnings}, policy, would_commit, commit_would_fail_with,
+  projected_effects, state_versions, expires_at, compensating_tool}`. A commit carries
+  `{status, document, effects, events_emitted, journal_entry, receipt, policy, warnings}`, where
+  `status` is `applied` or — when Keel recognises the idempotency key — `replayed`, returning the
+  original receipt and emitting nothing new.
+- **Goods acceptance.** `details.counted` gives `{sku, po_line_id, expected_qty, qty, damaged_qty,
+  short_qty, over_qty, unit_cost_cents, account, note}`. The console sends `accepted_lines` with
+  the counts a human typed; `short_qty`, `over_qty`, the journal entry and the value all come back
+  from Keel.
 
 `get_system_status` is deliberately **not** used. It requires `admin:status`, and a console token
 carries no admin scope, so Keel answers `FORBIDDEN / token lacks scope 'admin:status'`. The
 console has no privileged path: it reads what its token allows and shows Keel's refusal verbatim
 when it does not.
 
-Two facts Keel does not expose, worked around and worth a tool:
+Both gaps the console used to work around have been closed by the kernel, and both workarounds
+are deleted:
 
-- **No "current period."** The Status period selector lists periods from
-  `search_documents(FiscalPeriod)` and starts on whatever `status: open, limit: 1` returns first.
-  Because the seed creates all 36 periods in the same instant, Keel's "newest first" ordering
-  makes that `2025-01`, not the live period.
-- **No document-type list.** `search_documents` requires a `type` but nothing returns the legal
-  values, so `loadDocumentTypes` reads them from that tool's own `VALIDATION_ERROR.details.known`
-  — once, lazily, cached. It is the only place the console takes data from an error.
+- **`get_current_period`** names the current period against Keel's own `as_of`, so `PeriodPicker`
+  no longer starts on whatever `search_documents(FiscalPeriod, status: open, limit: 1)` happened
+  to return first — which, because the seed creates all 36 periods in the same instant, was
+  `2025-01` rather than the live period.
+- **`list_document_types`** returns the legal types with how each is keyed, filtered and ordered.
+  `loadDocumentTypes` reads it like any other query, so the console no longer takes data from an
+  error anywhere.
 
-Useful for the next step: `list_capabilities` returns all 65 tools with signature and scope, and
+One gap remains: **the console cannot learn its own token's scopes.** They appear only in a
+`FORBIDDEN` error's `details.granted`, and reading that would reintroduce the pattern just
+removed. So `/approvals` offers every decision and lets Keel be the gate — `would_commit` on the
+simulation decides whether a commit is offered, and a refusal is shown verbatim. A `whoami` /
+`describe_token` query tool would let the buttons be disabled up front.
+
+Useful for the next step: `list_capabilities` returns all 67 tools with signature and scope, and
 `describe_tool(name)` returns one tool's JSON Schema.
 
 ## Deploy notes

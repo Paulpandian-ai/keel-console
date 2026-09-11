@@ -1,4 +1,5 @@
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
+import Approvals from './pages/Approvals'
 import Events from './pages/Events'
 import Inventory from './pages/Inventory'
 import Ledger from './pages/Ledger'
@@ -9,13 +10,14 @@ import Status from './pages/Status'
 import Trace from './pages/Trace'
 import { useSession } from './lib/useSession'
 
-/** Routes shipped so far. Step 4 adds /approvals, step 5 /receipts. */
+/** Routes shipped so far. Step 5 adds /receipts. */
 const ROUTES = [
   { to: '/', label: 'Status', end: true },
   { to: '/events', label: 'Events', end: false },
   { to: '/ledger', label: 'Ledger', end: false },
   { to: '/open-items', label: 'Open items', end: false },
   { to: '/inventory', label: 'Inventory', end: false },
+  { to: '/approvals', label: 'Approvals', end: false },
   { to: '/recon', label: 'Close', end: false },
   { to: '/trace', label: 'Trace', end: false },
   { to: '/settings', label: 'Settings', end: false },
@@ -50,6 +52,7 @@ export default function App() {
           <Route path="/ledger" element={<Ledger />} />
           <Route path="/open-items" element={<OpenItems />} />
           <Route path="/inventory" element={<Inventory />} />
+          <Route path="/approvals" element={<Approvals />} />
           <Route path="/recon" element={<Recon />} />
           <Route path="/trace" element={<Trace />} />
           <Route path="/settings" element={<Settings />} />

@@ -2,7 +2,9 @@
  * @vitest-environment jsdom
  *
  * The pages, rendered against payloads recorded from the live facade on
- * 2026-09-10. `keelClient` is mocked; nothing here touches the network.
+ * 2026-09-10, with the open-item rows and `get_current_period` recorded on
+ * 2026-09-11 once demo data existed. `keelClient` is mocked; nothing here
+ * touches the network.
  */
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -80,12 +82,17 @@ const RESULTS: Record<string, unknown> = {
     ],
     total_value_cents: 275000,
   },
-  list_open_items: {
-    as_of: '2026-09-10',
-    count: 0,
-    items: [],
-    kind: 'ap',
-    total_remaining_cents: 0,
+  get_current_period: {
+    as_of: '2026-09-11',
+    is_open: true,
+    nearest_open_period: null,
+    period: {
+      code: '2026-09',
+      end_date: '2026-09-30',
+      id: '01M25Y1AZ4B69W0M43XQCM7G6N',
+      start_date: '2026-09-01',
+      status: 'open',
+    },
   },
   list_pending_approvals: { count: 0, pending: [] },
   get_period: {
@@ -207,8 +214,39 @@ const PERIOD_HITS = [
   { id: 'p2', number: '2026-08', status: 'closed', type: 'FiscalPeriod', total_cents: null },
 ]
 
+/** `list_open_items`, recorded live 2026-09-11: AP is empty, AR has one row. */
+const OPEN_ITEMS: Record<string, unknown> = {
+  ap: { as_of: '2026-09-11', count: 0, items: [], kind: 'ap', total_remaining_cents: 0 },
+  ar: {
+    as_of: '2026-09-11',
+    count: 1,
+    kind: 'ar',
+    total_remaining_cents: 80000,
+    items: [
+      {
+        amount_cents: 80000,
+        created_at: '2026-09-10T19:59:43',
+        days_to_due: 29,
+        due_date: '2026-10-10',
+        id: '01M26EF6MQAM4CK5RZJFPGJGRP',
+        kind: 'ar',
+        overdue: false,
+        party_id: '01M25Y1B0D7KRZ3T7E9AXY49NF',
+        remaining_cents: 80000,
+        source_doc_id: '01M26EF6MMPW27CN2REQF0PYD7',
+        source_doc_number: 'CINV-000001',
+        source_doc_type: 'CustomerInvoice',
+        state_version: 1,
+        status: 'open',
+        updated_at: '2026-09-10T19:59:43',
+      },
+    ],
+  },
+}
+
 const query = vi.fn(async (tool: string, payload: ToolPayload = {}) => {
   if (tool === 'get_reconciliation') return RECON[String(payload.kind)]
+  if (tool === 'list_open_items') return OPEN_ITEMS[String(payload.kind)]
   if (tool === 'search_documents') {
     const items = payload.status ? PERIOD_HITS.filter((p) => p.status === payload.status) : PERIOD_HITS
     return { type: payload.type, count: items.length, offset: 0, items }
@@ -381,7 +419,7 @@ describe('Open items', () => {
   it('shows the AP sub-ledger envelope and Keel\'s own as_of date', async () => {
     show(<OpenItems />, '/open-items')
 
-    expect(await screen.findByText('2026-09-10')).toBeTruthy()
+    expect(await screen.findByText('2026-09-11')).toBeTruthy()
     expect(await screen.findByText('Keel has no open ap items.')).toBeTruthy()
     expect(query).toHaveBeenCalledWith(
       'list_open_items',
@@ -393,7 +431,7 @@ describe('Open items', () => {
   it('asks Keel for the AR sub-ledger when that tab is chosen', async () => {
     const user = userEvent.setup()
     show(<OpenItems />, '/open-items')
-    await screen.findByText('2026-09-10')
+    await screen.findByText('2026-09-11')
 
     await user.click(screen.getByText('Receivable'))
 
@@ -406,10 +444,28 @@ describe('Open items', () => {
     )
   })
 
+  it('renders the recorded AR row rather than guessing at its columns', async () => {
+    const user = userEvent.setup()
+    show(<OpenItems />, '/open-items')
+    await screen.findByText('2026-09-11')
+
+    await user.click(screen.getByText('Receivable'))
+
+    expect(await screen.findByText('CINV-000001')).toBeTruthy()
+    expect(await screen.findByText('CustomerInvoice')).toBeTruthy()
+    // The amount and the remaining amount, both Keel's, both regrouped only.
+    expect((await screen.findAllByText('800.00')).length).toBe(3)
+    // Keel's own due date and its own signed day count, never computed here.
+    expect(await screen.findByText('2026-10-10')).toBeTruthy()
+    expect(await screen.findByText('· 29d')).toBeTruthy()
+    // `overdue: false` is Keel's verdict; the console never compares dates.
+    expect(await screen.findByText('open')).toBeTruthy()
+  })
+
   it('leaves the overdue judgement to Keel', async () => {
     const user = userEvent.setup()
     show(<OpenItems />, '/open-items')
-    await screen.findByText('2026-09-10')
+    await screen.findByText('2026-09-11')
 
     await user.click(screen.getByLabelText('Overdue only'))
 

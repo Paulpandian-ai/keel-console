@@ -2,10 +2,11 @@
  * Field readers for Keel payloads.
  *
  * Keel owns every shape here. These key names are **pinned against the live
- * facade** (headless-erp-production-0480.up.railway.app, 2026-09-10) with a
- * token holding `*:read`, `approvals:read`, `procurement:approve`,
- * `procurement:receive` — they are recorded, not guessed. Anything still
- * unverified says so at its definition.
+ * facade** (headless-erp-production-0480.up.railway.app) with a token holding
+ * `*:read`, `approvals:write`, `procurement:approve`, `procurement:receive` —
+ * they are recorded, not guessed. The reads were taken 2026-09-10; open-item
+ * rows, pending approvals and the simulate/commit envelopes 2026-09-11, once
+ * demo data existed. Anything still unverified says so at its definition.
  *
  * Nothing in this file computes a value. It reads, and it formats for display.
  */
@@ -507,21 +508,65 @@ export function readInventory(payload: unknown): Inventory {
 /* -------------------------------------------------------------- open items */
 
 /**
+ * One row of `list_open_items` → `items`. Pinned live 2026-09-11 against the AR
+ * sub-ledger, which now carries CINV-000001:
+ *
+ *   {id, kind, status, party_id, amount_cents, remaining_cents, due_date,
+ *    days_to_due, overdue, source_doc_id, source_doc_number, source_doc_type,
+ *    created_at, updated_at, state_version}
+ *
+ * `overdue` and `days_to_due` are **Keel's**, decided against its own `as_of`.
+ * The console renders them; it never compares a date.
+ */
+export interface OpenItem {
+  id: string | null
+  kind: string | null
+  status: string | null
+  partyId: string | null
+  amountCents: number | null
+  remainingCents: number | null
+  dueDate: string | null
+  /** Keel's count, signed: negative once the due date has passed. */
+  daysToDue: number | null
+  overdue: boolean | null
+  sourceDocId: string | null
+  sourceDocNumber: string | null
+  sourceDocType: string | null
+}
+
+export function readOpenItem(raw: unknown): OpenItem {
+  const item = asObject(raw)
+  return {
+    id: scalar(item.id),
+    kind: scalar(item.kind),
+    status: scalar(item.status),
+    partyId: scalar(item.party_id),
+    amountCents: asNumber(item.amount_cents),
+    remainingCents: asNumber(item.remaining_cents),
+    dueDate: scalar(item.due_date),
+    daysToDue: asNumber(item.days_to_due),
+    overdue: typeof item.overdue === 'boolean' ? item.overdue : null,
+    sourceDocId: scalar(item.source_doc_id),
+    sourceDocNumber: scalar(item.source_doc_number),
+    sourceDocType: scalar(item.source_doc_type),
+  }
+}
+
+/** What to hand `trace_document` for an open item: its source document. */
+export function openItemTarget(item: OpenItem): string | null {
+  return item.sourceDocNumber ?? item.sourceDocId
+}
+
+/**
  * `list_open_items(kind, party?, overdue_only?, as_of?)` →
  * `{kind, as_of, count, total_remaining_cents, items}`.
- *
- * The envelope above is recorded. **The rows are not**: the seeded dataset has
- * no unpaid invoices, so `items` has only ever come back empty and the console
- * has never seen a row's keys. Rather than guess at them, the page renders
- * whatever columns Keel sends (see `AutoTable`) and this reader keeps the rows
- * untouched. Replace with named fields once a dataset with AP/AR data exists.
  */
 export interface OpenItems {
   kind: string | null
   asOf: string | null
   count: number | null
   totalRemainingCents: number | null
-  items: Json[]
+  items: OpenItem[]
 }
 
 export function readOpenItems(payload: unknown): OpenItems {
@@ -531,7 +576,7 @@ export function readOpenItems(payload: unknown): OpenItems {
     asOf: scalar(source.as_of),
     count: asNumber(source.count),
     totalRemainingCents: asNumber(source.total_remaining_cents),
-    items: asArray(source.items).map(asObject),
+    items: asArray(source.items).map(readOpenItem),
   }
 }
 
@@ -601,5 +646,382 @@ export function readPeriodReadiness(payload: unknown): PeriodReadiness {
     warnings: asArray(readiness.warnings),
     blockedSupplierInvoices: asArray(readiness.blocked_supplier_invoices),
     draftPurchaseOrders: asArray(readiness.draft_purchase_orders),
+  }
+}
+
+/**
+ * `get_current_period()` → `{as_of, is_open, nearest_open_period, period,
+ * close_readiness}`. Keel names the current period against its own `as_of`;
+ * the console never reads the browser clock to work one out.
+ */
+export interface CurrentPeriod {
+  asOf: string | null
+  code: string | null
+  isOpen: boolean | null
+  /** Set when `as_of` falls outside every open period. */
+  nearestOpenPeriod: string | null
+}
+
+export function readCurrentPeriod(payload: unknown): CurrentPeriod {
+  const source = asObject(payload)
+  const period = asObject(source.period)
+  return {
+    asOf: scalar(source.as_of),
+    code: scalar(period.code),
+    isOpen: typeof source.is_open === 'boolean' ? source.is_open : null,
+    nearestOpenPeriod: scalar(source.nearest_open_period),
+  }
+}
+
+/* --------------------------------------------------------------- approvals */
+
+/**
+ * The effects of a write, as Keel projects them (`simulate.projected_effects`)
+ * and as it reports them afterwards (`commit.effects`) — the same shape both
+ * times, pinned live 2026-09-11:
+ *
+ *   {documents, journal_entry, open_items, inventory_deltas, balance_deltas,
+ *    events, details?}
+ *
+ * Every figure in here is Keel's. The console lays them out; it does not net a
+ * delta, total a journal entry or decide whether one balances.
+ */
+export interface EffectDocument {
+  type: string | null
+  id: string | null
+  number: string | null
+  status: string | null
+  /** `create` or `update`. */
+  action: string | null
+  /** The columns that would be written. Rendered as-is. */
+  fields: Json
+}
+
+export interface BalanceDelta {
+  account: string | null
+  deltaCents: number | null
+}
+
+export interface InventoryDelta {
+  sku: string | null
+  qtyDelta: number | null
+}
+
+/** `journal_entry` — Keel's own lines, totals and `is_balanced`. */
+export interface EffectJournalLine {
+  account: string | null
+  debitCents: number | null
+  creditCents: number | null
+  description: string | null
+}
+
+export interface EffectJournalEntry {
+  id: string | null
+  postingDate: string | null
+  memo: string | null
+  sourceType: string | null
+  lines: EffectJournalLine[]
+  totalDebitCents: number | null
+  totalCreditCents: number | null
+  isBalanced: boolean | null
+}
+
+export interface Effects {
+  documents: EffectDocument[]
+  journalEntry: EffectJournalEntry | null
+  balanceDeltas: BalanceDelta[]
+  inventoryDeltas: InventoryDelta[]
+  openItems: Json[]
+  events: string[]
+  /** Per-tool extras: `accept_goods` puts `{counted, discrepancies}` here. */
+  details: Json
+}
+
+export function readEffects(payload: unknown): Effects {
+  const source = asObject(payload)
+  const journal = source.journal_entry ? asObject(source.journal_entry) : null
+  return {
+    documents: asArray(source.documents).map((raw) => {
+      const doc = asObject(raw)
+      return {
+        type: scalar(doc.type),
+        id: scalar(doc.id),
+        number: scalar(doc.number),
+        status: scalar(doc.status),
+        action: scalar(doc.action),
+        fields: asObject(doc.fields),
+      }
+    }),
+    journalEntry: journal && {
+      id: scalar(journal.id),
+      postingDate: scalar(journal.posting_date),
+      memo: scalar(journal.memo),
+      sourceType: scalar(journal.source_type),
+      lines: asArray(journal.lines).map((raw) => {
+        const line = asObject(raw)
+        return {
+          account: scalar(line.account),
+          debitCents: asNumber(line.debit_cents),
+          creditCents: asNumber(line.credit_cents),
+          description: scalar(line.description),
+        }
+      }),
+      totalDebitCents: asNumber(journal.total_debit_cents),
+      totalCreditCents: asNumber(journal.total_credit_cents),
+      isBalanced: typeof journal.is_balanced === 'boolean' ? journal.is_balanced : null,
+    },
+    balanceDeltas: asArray(source.balance_deltas).map((raw) => {
+      const delta = asObject(raw)
+      return { account: scalar(delta.account), deltaCents: asNumber(delta.delta_cents) }
+    }),
+    inventoryDeltas: asArray(source.inventory_deltas).map((raw) => {
+      const delta = asObject(raw)
+      return { sku: scalar(delta.sku), qtyDelta: asNumber(delta.qty_delta) }
+    }),
+    openItems: asArray(source.open_items).map(asObject),
+    events: asArray(source.events)
+      .map(scalar)
+      .filter((event): event is string => event !== null),
+    details: asObject(source.details),
+  }
+}
+
+/**
+ * One line as Keel counts it, under `details.counted` on a `goods_acceptance`
+ * request and on every `accept_goods` simulation:
+ *
+ *   {sku, po_line_id, expected_qty, qty, damaged_qty, short_qty, over_qty,
+ *    unit_cost_cents, account, note}
+ *
+ * `short_qty` and `over_qty` are **Keel's arithmetic**, not the console's: the
+ * page sends the counts a human typed and reads back what Keel made of them.
+ */
+export interface CountedLine {
+  sku: string | null
+  poLineId: string | null
+  expectedQty: number | null
+  qty: number | null
+  damagedQty: number | null
+  shortQty: number | null
+  overQty: number | null
+  unitCostCents: number | null
+  account: string | null
+  note: string | null
+}
+
+export function readCountedLine(raw: unknown): CountedLine {
+  const line = asObject(raw)
+  return {
+    sku: scalar(line.sku),
+    poLineId: scalar(line.po_line_id),
+    expectedQty: asNumber(line.expected_qty),
+    qty: asNumber(line.qty),
+    damagedQty: asNumber(line.damaged_qty),
+    shortQty: asNumber(line.short_qty),
+    overQty: asNumber(line.over_qty),
+    unitCostCents: asNumber(line.unit_cost_cents),
+    account: scalar(line.account),
+    note: scalar(line.note),
+  }
+}
+
+/** `details.counted` wherever it appears — on a request or on a simulation. */
+export function countedLinesOf(effects: Effects): CountedLine[] {
+  return asArray(effects.details.counted).map(readCountedLine)
+}
+
+/** `details.discrepancies` — Keel's prose, e.g. "VALVE-2IN: 1 short". */
+export function discrepanciesOf(effects: Effects): string[] {
+  return asArray(effects.details.discrepancies)
+    .map(scalar)
+    .filter((note): note is string => note !== null)
+}
+
+/**
+ * One pending item from `list_pending_approvals` → `pending`, pinned live
+ * 2026-09-11 against a `po_approval` and a `goods_acceptance`:
+ *
+ *   {id, kind, status, reason, requested_by, created_at, expires_at, expired,
+ *    decided_at, decided_by, decision_comment, document_type, document_id,
+ *    document_number, tool_name, payload, projected_effects}
+ *
+ * `projected_effects` is what the agent's blocked call *would* do — the same
+ * shape a simulate returns, carried on the request itself.
+ */
+export interface ApprovalRequest {
+  id: string | null
+  /** `po_approval`, `goods_acceptance` or `invoice_variance`. */
+  kind: string | null
+  status: string | null
+  /** Why Keel parked it. Prose, shown verbatim. */
+  reason: string | null
+  requestedBy: string | null
+  createdAt: string | null
+  expiresAt: string | null
+  /** Keel's judgement against its own clock; never a date comparison here. */
+  expired: boolean | null
+  documentType: string | null
+  documentId: string | null
+  documentNumber: string | null
+  /** The tool whose call was parked, e.g. `create_purchase_order`. */
+  toolName: string | null
+  payload: Json
+  projectedEffects: Effects
+}
+
+export function readApprovalRequest(raw: unknown): ApprovalRequest {
+  const source = asObject(raw)
+  return {
+    id: scalar(source.id),
+    kind: scalar(source.kind),
+    status: scalar(source.status),
+    reason: scalar(source.reason),
+    requestedBy: scalar(source.requested_by),
+    createdAt: scalar(source.created_at),
+    expiresAt: scalar(source.expires_at),
+    expired: typeof source.expired === 'boolean' ? source.expired : null,
+    documentType: scalar(source.document_type),
+    documentId: scalar(source.document_id),
+    documentNumber: scalar(source.document_number),
+    toolName: scalar(source.tool_name),
+    payload: asObject(source.payload),
+    projectedEffects: readEffects(source.projected_effects),
+  }
+}
+
+/** `list_pending_approvals` → `{count, pending}`. */
+export interface PendingApprovals {
+  count: number | null
+  pending: ApprovalRequest[]
+}
+
+export function readPendingApprovals(payload: unknown): PendingApprovals {
+  const source = asObject(payload)
+  return {
+    count: asNumber(source.count),
+    pending: asArray(source.pending).map(readApprovalRequest),
+  }
+}
+
+/** What to hand `trace_document` for an approval: the document it is about. */
+export function approvalTarget(request: ApprovalRequest): string | null {
+  return request.documentNumber ?? request.documentId
+}
+
+/* ------------------------------------------------------- simulate & commit */
+
+/** `policy` on a simulation and on a commit. Keel's decision, shown verbatim. */
+export interface PolicyDecision {
+  decision: string | null
+  rulesEvaluated: string[]
+  rulesTriggered: string[]
+  reasons: string[]
+  warnings: string[]
+  errorCode: string | null
+  version: number | null
+  hash: string | null
+}
+
+function readStrings(value: unknown): string[] {
+  return asArray(value)
+    .map(scalar)
+    .filter((entry): entry is string => entry !== null)
+}
+
+export function readPolicy(payload: unknown): PolicyDecision {
+  const source = asObject(payload)
+  return {
+    decision: scalar(source.decision),
+    rulesEvaluated: readStrings(source.rules_evaluated),
+    rulesTriggered: readStrings(source.rules_triggered),
+    reasons: readStrings(source.reasons),
+    warnings: readStrings(source.warnings),
+    errorCode: scalar(source.error_code),
+    version: asNumber(source.policy_version),
+    hash: scalar(source.policy_hash),
+  }
+}
+
+/**
+ * A simulation, read from the flat envelope `POST /api/simulate/{tool}`
+ * returns. `wouldCommit` is Keel's verdict and the only thing that decides
+ * whether the console offers a Confirm button — the console never works out for
+ * itself whether a write is allowed.
+ */
+export interface Simulation {
+  requestId: string | null
+  simulationId: string | null
+  tool: string | null
+  wouldCommit: boolean | null
+  commitWouldFailWith: string | null
+  errors: string[]
+  warnings: string[]
+  policy: PolicyDecision
+  effects: Effects
+  expiresAt: string | null
+}
+
+export function readSimulation(envelope: unknown): Simulation {
+  const source = asObject(envelope)
+  const validation = asObject(source.validation)
+  return {
+    requestId: scalar(source.request_id),
+    simulationId: scalar(source.simulation_id),
+    tool: scalar(source.tool),
+    wouldCommit: typeof source.would_commit === 'boolean' ? source.would_commit : null,
+    commitWouldFailWith: scalar(source.commit_would_fail_with),
+    errors: readStrings(validation.errors),
+    warnings: readStrings(validation.warnings),
+    policy: readPolicy(source.policy),
+    effects: readEffects(source.projected_effects),
+    expiresAt: scalar(source.expires_at),
+  }
+}
+
+/**
+ * A commit, read from the flat envelope `POST /api/commit/{tool}` returns.
+ * `status` is `applied` the first time and `replayed` when Keel recognises the
+ * idempotency key, in which case `eventsEmitted` repeats the original sequence
+ * numbers and no new events exist.
+ */
+export interface CommitOutcome {
+  requestId: string | null
+  tool: string | null
+  status: string | null
+  receiptId: string | null
+  receipt: Json
+  document: EffectDocument | null
+  effects: Effects
+  /** `[{seq, type}]`, as Keel emitted them. */
+  eventsEmitted: { seq: number | null; type: string | null }[]
+  warnings: string[]
+  policy: PolicyDecision
+}
+
+export function readCommitOutcome(envelope: unknown): CommitOutcome {
+  const source = asObject(envelope)
+  const receipt = asObject(source.receipt)
+  const document = source.document ? asObject(source.document) : null
+  return {
+    requestId: scalar(source.request_id),
+    tool: scalar(source.tool),
+    status: scalar(source.status),
+    receiptId: scalar(receipt.id),
+    receipt,
+    document: document && {
+      type: scalar(document.type),
+      id: scalar(document.id),
+      number: scalar(document.number),
+      status: scalar(document.status),
+      action: scalar(document.action),
+      fields: asObject(document.fields),
+    },
+    effects: readEffects(source.effects),
+    eventsEmitted: asArray(source.events_emitted).map((raw) => {
+      const event = asObject(raw)
+      return { seq: asNumber(event.seq), type: scalar(event.type) }
+    }),
+    warnings: readStrings(source.warnings),
+    policy: readPolicy(source.policy),
   }
 }

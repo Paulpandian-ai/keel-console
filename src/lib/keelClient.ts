@@ -45,6 +45,57 @@ export interface KeelResultEnvelope<T> extends KeelEnvelope {
   result: T
 }
 
+/**
+ * `POST /api/simulate/{tool}` — the dry run. **Not** a `KeelResultEnvelope`:
+ * there is no `result` key, the fields sit at the top level (pinned live
+ * 2026-09-11). `simulation_id` is handed to the commit, and the commit's
+ * idempotency key is built from `request_id`.
+ */
+export interface KeelSimulationEnvelope extends KeelEnvelope {
+  ok: true
+  tool?: string
+  simulation_id?: string
+  /** Keel's own verdict on whether the commit would go through. */
+  would_commit?: boolean
+  /** The error code the commit would fail with, when `would_commit` is false. */
+  commit_would_fail_with?: string | null
+  /** `{errors, warnings}`. */
+  validation?: unknown
+  /** `{decision, rules_evaluated, rules_triggered, reasons, warnings, ...}`. */
+  policy?: unknown
+  /** `{documents, journal_entry, open_items, inventory_deltas, balance_deltas, events, details?}`. */
+  projected_effects?: unknown
+  state_versions?: Record<string, number>
+  /** The simulation goes stale after this; the commit then has to be re-simulated. */
+  expires_at?: string
+  compensating_tool?: unknown
+}
+
+/**
+ * `POST /api/commit/{tool}` — the write. Flat like the simulate envelope, with
+ * no `result` key (pinned live 2026-09-11). `status` is `applied` on the first
+ * commit and `replayed` when the same `idempotency_key` is sent again, in which
+ * case Keel returns the original `receipt` and emits no new events.
+ */
+export interface KeelCommitEnvelope extends KeelEnvelope {
+  ok: true
+  tool?: string
+  status?: string
+  /** The primary document written: `{type, id, number, status, action}`. */
+  document?: unknown
+  /** Same shape as the simulate's `projected_effects`, now actual. */
+  effects?: unknown
+  /** `[{seq, type}]` — empty on a replay. */
+  events_emitted?: unknown
+  journal_entry?: unknown
+  /** The signed receipt; `receipt.id` is what `verify_receipt` takes. */
+  receipt?: unknown
+  policy?: unknown
+  warnings?: unknown
+  approval_request?: unknown
+  compensating_tool?: unknown
+}
+
 /** `GET /healthz` — the one unauthenticated endpoint, and the only bare body. */
 export interface KeelHealth {
   status: string
@@ -287,12 +338,12 @@ export function createKeelClient(config: KeelClientConfig) {
      * `query` this hands back the whole envelope, because the commit that
      * follows needs its `request_id` for the idempotency key.
      */
-    simulate<T>(
+    simulate(
       tool: string,
       payload: ToolPayload = {},
       options: CallOptions = {},
-    ): Promise<KeelResultEnvelope<T>> {
-      return callTool<T>('simulate', tool, payload, options)
+    ): Promise<KeelSimulationEnvelope> {
+      return callTool<KeelSimulationEnvelope>('simulate', tool, payload, options)
     },
 
     /**
@@ -368,13 +419,13 @@ export function createKeelClient(config: KeelClientConfig) {
     },
 
     /** The write itself. Always preceded by `simulate` and a confirmation. */
-    commit<T>(
+    commit(
       tool: string,
       payload: ToolPayload,
       options: CommitOptions,
-    ): Promise<KeelResultEnvelope<T>> {
+    ): Promise<KeelCommitEnvelope> {
       const { idempotencyKey, simulationId, ...rest } = options
-      return callTool<T>(
+      return callTool<KeelCommitEnvelope>(
         'commit',
         tool,
         {
@@ -391,20 +442,17 @@ export function createKeelClient(config: KeelClientConfig) {
 export type KeelClient = ReturnType<typeof createKeelClient>
 
 /**
- * The document types Keel knows about.
+ * The document types Keel knows about, from `list_document_types`.
  *
- * `search_documents` requires a `type`, but no query tool in the catalog returns
- * the list of legal types — the only component that will name them is
- * `search_documents` itself, which rejects an unknown type with
- * `details.known: [...]`. So the console asks it once, lazily, and caches the
- * answer for the page view. The list is still Keel's, never the console's.
+ * This used to read the list out of `search_documents`' own
+ * `VALIDATION_ERROR.details.known` — the only place Keel named them — and was
+ * the one spot in the console that took data from an error. The kernel has
+ * since shipped `list_document_types`, so that workaround is gone: each entry
+ * is `{type, identifier_field, number_prefix, date_field, order_by,
+ * party_field, filters}` and the console reads it like any other query.
  *
- * This is the one place in the console that leans on an error for data.
- *
- * TODO: replace with `list_document_types` (requested from the kernel) — or
- * type enums on `list_capabilities` — and delete this function once it lands.
+ * Cached for the page view; the catalog does not change under a session.
  */
-const UNKNOWN_TYPE_PROBE = '__console_type_probe__'
 let cachedDocumentTypes: string[] | null = null
 
 export async function loadDocumentTypes(
@@ -412,21 +460,12 @@ export async function loadDocumentTypes(
   options: CallOptions = {},
 ): Promise<string[]> {
   if (cachedDocumentTypes) return cachedDocumentTypes
-  try {
-    await client.query('search_documents', { type: UNKNOWN_TYPE_PROBE, limit: 1 }, options)
-  } catch (caught) {
-    if (isKeelApiError(caught)) {
-      const known = (caught.details as { known?: unknown } | undefined)?.known
-      if (Array.isArray(known)) {
-        cachedDocumentTypes = known.map(String)
-        return cachedDocumentTypes
-      }
-    }
-    throw caught
-  }
-  // Keel accepted the probe: it is no longer rejecting unknown types, so there
-  // is nothing to read here and the caller should fall back to a plain input.
-  return []
+  const page = await client.query<{ types?: unknown }>('list_document_types', {}, options)
+  const types = Array.isArray(page?.types) ? page.types : []
+  cachedDocumentTypes = types
+    .map((entry) => (entry as { type?: unknown })?.type)
+    .filter((type): type is string => typeof type === 'string')
+  return cachedDocumentTypes
 }
 
 /** The app-wide client, bound to the current session. */

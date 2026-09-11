@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import ErrorBlock from './ErrorBlock'
 import { keel } from '../lib/keelClient'
-import { readSearchPage, type Json } from '../lib/keelFields'
+import { readCurrentPeriod, readSearchPage, type Json } from '../lib/keelFields'
 import { useKeelQuery } from '../lib/useKeelQuery'
 import { useSession } from '../lib/useSession'
 
@@ -11,13 +11,11 @@ const PERIOD_PAGE = 500
 /**
  * The period a page is looking at.
  *
- * Keel has no "current period" tool, so which period to show is a choice the
- * user makes, not a value the console derives: the options are the FiscalPeriod
- * documents Keel lists, and the initial pick is whatever Keel returns first for
- * `status: open`. Nothing here reads the browser clock.
- *
- * TODO: replace the two searches with a Keel tool that names the current period
- * (requested from the kernel alongside `list_document_types`).
+ * The options are the FiscalPeriod documents Keel lists, and the initial pick
+ * is the period `get_current_period` names — Keel deciding against its own
+ * `as_of`, not the console against the browser clock. That tool has landed, so
+ * the old workaround (take whatever `search_documents(status: open, limit: 1)`
+ * happened to return first) is gone.
  */
 export default function PeriodPicker({
   value,
@@ -43,19 +41,18 @@ export default function PeriodPicker({
     [baseUrl, hasToken],
   )
 
-  const newestOpen = useKeelQuery<Json | null>(
+  const current = useKeelQuery<Json | null>(
     (signal) =>
       hasToken && !allowAll
-        ? keel.query<Json>(
-            'search_documents',
-            { type: 'FiscalPeriod', status: 'open', limit: 1 },
-            { signal },
-          )
+        ? keel.query<Json>('get_current_period', {}, { signal })
         : Promise.resolve(null),
     [baseUrl, hasToken, allowAll],
   )
 
-  const suggested = newestOpen.data ? readSearchPage(newestOpen.data).hits[0]?.number : undefined
+  // Keel's answer for "now". `nearest_open_period` is what it falls back to
+  // when `as_of` sits outside every open period; the console picks neither.
+  const currentPeriod = current.data ? readCurrentPeriod(current.data) : null
+  const suggested = currentPeriod?.code ?? currentPeriod?.nearestOpenPeriod ?? undefined
 
   useEffect(() => {
     if (!value && suggested) onChange(suggested)

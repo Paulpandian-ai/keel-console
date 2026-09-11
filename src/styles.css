@@ -366,3 +366,141 @@ table.feed tfoot th.col-money { text-align: right; font-family: var(--mono); }
 .recon-card .hint { margin: 0; }
 .notes-pair { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 .notes-pair h3 { margin: 0 0 4px; font-size: 13px; }
+
+/* ------------------------------------------------------------- approvals */
+
+.approval-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  margin-top: 1rem;
+  background: var(--panel);
+}
+
+.approval-card.is-open {
+  border-color: var(--accent);
+}
+
+.approval-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.approval-kind {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.approval-reason {
+  margin: 0.55rem 0 0.75rem;
+  color: var(--text);
+}
+
+.counted-editor {
+  margin-top: 0.9rem;
+}
+
+.counted-editor h4,
+.effect-group h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.input-qty {
+  width: 5.5rem;
+  text-align: right;
+}
+
+.approval-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px dashed var(--line);
+}
+
+.decision-panel {
+  margin-top: 1rem;
+  padding: 0.9rem 1rem;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: var(--panel-2);
+}
+
+.decision-panel.is-done {
+  border-color: var(--ok);
+}
+
+.decision-panel h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.confirm-row {
+  margin-top: 1rem;
+  gap: 0.8rem;
+}
+
+.keybox {
+  font-size: 0.72rem;
+  word-break: break-all;
+}
+
+.effects {
+  display: grid;
+  gap: 1rem;
+  margin-top: 0.8rem;
+}
+
+.effect-docs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.effect-doc {
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+.deltas {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.deltas li {
+  display: flex;
+  gap: 0.8rem;
+  align-items: baseline;
+}
+
+.delta-up {
+  color: var(--ok);
+}
+
+.delta-down {
+  color: var(--warn);
+}
+
+.btn-strong {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
